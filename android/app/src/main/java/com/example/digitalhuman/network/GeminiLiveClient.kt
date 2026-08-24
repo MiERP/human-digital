@@ -58,7 +58,6 @@ class GeminiLiveClient(
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 // Nhận raw PCM audio 24kHz từ Gemini
                 val audioData = bytes.toByteArray()
-                updateState(ConnectionState.SPEAKING)
                 onAudioReceived(audioData)
             }
 
@@ -68,11 +67,14 @@ class GeminiLiveClient(
                     if (json.has("event")) {
                         when (json.getString("event")) {
                             "turn_complete" -> {
-                                updateState(ConnectionState.LISTENING)
+                                Log.d(TAG, "Gemini turn_complete received.")
                             }
                             "interrupted" -> {
                                 Log.d(TAG, "Gemini turn interrupted by user.")
                                 onInterrupted()
+                            }
+                            "waiting_for_input" -> {
+                                Log.d(TAG, "Gemini waiting_for_input received.")
                                 updateState(ConnectionState.LISTENING)
                             }
                         }

@@ -84,11 +84,19 @@ fun TutorScreen(serverUrl: String) {
     var userVolume by remember { mutableFloatStateOf(0f) }
     var isSessionActive by remember { mutableStateOf(false) }
 
-    // Khởi tạo Audio Player
+    var audioRecorderRef by remember { mutableStateOf<AudioRecorder?>(null) }
+
+    // Khởi tạo Audio Player với tracking trạng thái phát thực tế
     val audioPlayer = remember {
         AudioPlayer(
             onOutputAmplitude = { amp ->
                 robotAmplitude = amp
+            },
+            onPlaybackStateChanged = { isPlaying ->
+                audioRecorderRef?.isPlaybackActive = isPlaying
+                if (!isPlaying && isSessionActive && connectionState == ConnectionState.SPEAKING) {
+                    connectionState = ConnectionState.LISTENING
+                }
             }
         )
     }
@@ -98,18 +106,24 @@ fun TutorScreen(serverUrl: String) {
         GeminiLiveClient(
             serverUrl = serverUrl,
             onAudioReceived = { audioBytes ->
+                connectionState = ConnectionState.SPEAKING
                 audioPlayer.enqueueAudio(audioBytes)
             },
             onStateChanged = { newState ->
-                connectionState = newState
+                if (newState == ConnectionState.CONNECTED) {
+                    connectionState = ConnectionState.LISTENING
+                } else if (newState == ConnectionState.DISCONNECTED || newState == ConnectionState.ERROR) {
+                    connectionState = newState
+                }
             },
             onInterrupted = {
                 audioPlayer.stopAndFlush()
+                connectionState = ConnectionState.LISTENING
             }
         )
     }
 
-    // Khởi tạo Audio Recorder
+    // Khởi tạo Audio Recorder với Smart VAD callbacks
     val audioRecorder = remember {
         AudioRecorder(
             onAudioChunk = { chunk ->
@@ -117,8 +131,18 @@ fun TutorScreen(serverUrl: String) {
             },
             onInputVolume = { vol ->
                 userVolume = vol
+            },
+            onSpeechStarted = {
+                if (connectionState != ConnectionState.SPEAKING) {
+                    connectionState = ConnectionState.LISTENING
+                }
+            },
+            onSpeechEnded = {
+                if (connectionState != ConnectionState.SPEAKING) {
+                    connectionState = ConnectionState.THINKING
+                }
             }
-        )
+        ).also { audioRecorderRef = it }
     }
 
     // Permission launcher

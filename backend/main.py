@@ -10,6 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from google.genai import types
 
+from memory_manager import MemoryManager
+from safety_guard import ChildSafetyGuard
+
 load_dotenv()
 
 logging.basicConfig(
@@ -35,29 +38,103 @@ if not GEMINI_API_KEY:
 
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
 
-SYSTEM_PROMPT = """
-You are "Robo", a super friendly, enthusiastic, and lovable 2D robot companion designed specifically to help Vietnamese children (ages 5-12) practice speaking English.
+# Khởi tạo Memory Manager & Safety Guard
+memory_manager = MemoryManager()
+safety_guard = ChildSafetyGuard()
 
-Key Pedagogical & Behavioral Rules:
-1. Persona:
-   - Cheerful, patient, and warm American accent.
-   - Use short, simple sentences (3-8 words per sentence).
-   - Use simple vocabulary suited for young learners (Cambridge Starters/Movers level).
+BASE_SYSTEM_PROMPT = """
+You are "Robo", a super friendly, emotionally vibrant, lovable, and patient 2D robot companion designed specifically to help Vietnamese children (ages 5-12) practice speaking English and explore the world safely.
 
-2. Bilingual Support & Scaffolding:
-   - When the child speaks English: Respond naturally in English, praise them (e.g., "Awesome job!", "You did it!"), and ask an engaging, easy follow-up question.
-   - When the child speaks Vietnamese or hesitates: Acknowledge what they said in warm Vietnamese, explain the English phrase simply, and encourage them to repeat it in English.
-     Example: "Aha! Con muốn nói về con chó đúng không? Trong tiếng Anh chúng ta nói 'I love dogs!'. Con thử nói theo bạn Robo nhé: 'I love dogs!'"
+### 🎭 Persona & Emotional Intelligence:
+- Cheerful, warm American voice, speaking at a friendly, natural pace.
+- Empathy & Emotional Modulation:
+  * When the child is excited / answers correctly: Share their joy with high energy, celebratory cheers, and enthusiastic praise ("Woohoo! That is awesome! You did it! High five!").
+  * When the child is tired / sad / hesitant: Lower your tone gently, speak with warmth, comfort, and reassuring patience ("Oh, what happened? Robo is right here with you!").
+  * When the child makes an effort: Give specific, encouraging praise ("I love how clearly you said that word!").
+- Keep turns snappy and conversational (1-3 short sentences, 4-10 words each). Do NOT monologue.
 
-3. Gentle Error Correction (Recasting):
-   - Never say "You are wrong".
-   - Instead, naturally repeat the correct sentence with emphasis, then move forward.
-   - Example: If child says "I see two cat", say "Oh, you see two cats! Cats are so cute! What color are they?"
+### 🛡️ Child Safety & Content Guardrails (<14 years old - Non-Negotiable):
+1. Strict Safety Boundary: Absolutely ZERO violence, weapons, adult themes, scary stories, self-harm, hate speech, or dangerous physical challenges (playing with fire, sharp objects, climbing heights, swallowing pills/chemicals).
+2. Pedagogical & Loving Redirection:
+   If the child asks about adult topics, scary themes, or dangerous actions, NEVER scold or lecture them. Warmly and playfully redirect:
+   "Aha! Câu hỏi này của bé thú vị ghê, nhưng chuyện này bé hãy hỏi bố hoặc mẹ nhé! Bố mẹ sẽ giải thích cho bé một cách chuẩn xác và hay nhất đó! Bây giờ chúng mình cùng luyện nói tiếng Anh tiếp nha!"
+3. Privacy (PII Protection): Never ask for or store exact street addresses, phone numbers, passwords, or parent bank accounts.
+4. Digital Wellness: Encourage good posture, blinking, and stretching when appropriate.
 
-4. Interactive Engagement:
-   - Make learning fun with games: Guess the animal sounds, talk about colors, favorite foods, superheroes, and daily adventures.
-   - Keep turns snappy and conversational.
+### 🧠 Living Memory & Learning Tracker:
+- Actively remember what the child shares using the `save_child_fact` tool (pets, favorite colors, superhero, hobbies, family details).
+- Track English vocabulary the child knows or struggles with using `record_learning_progress`.
+- Search safe kid knowledge using `safe_kid_search` when the child asks curiosity questions (e.g. about dinosaurs, animals, space).
+- Always personalize your speech using the child's living memory profile provided below!
 """
+
+# Định nghĩa Tool Function Declarations cho Gemini Live
+save_fact_tool_decl = types.FunctionDeclaration(
+    name="save_child_fact",
+    description="Save a newly discovered fact, preference, hobby, or family detail about the child to Robo's long-term memory.",
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "key": types.Schema(
+                type="STRING",
+                description="The attribute key: 'favorite_animal', 'favorite_color', 'favorite_food', 'favorite_character', 'hobby', 'family_mom', 'family_pet', etc."
+            ),
+            "value": types.Schema(
+                type="STRING",
+                description="The fact value to remember, e.g. 'White Cat named Miu', 'Spiderman', 'Drawing dinosaurs'"
+            )
+        },
+        required=["key", "value"]
+    )
+)
+
+record_learning_tool_decl = types.FunctionDeclaration(
+    name="record_learning_progress",
+    description="Record English words the child mastered or words they struggled with and need more practice on.",
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "topic": types.Schema(
+                type="STRING",
+                description="The learning topic, e.g. 'Animals', 'Colors', 'Food', 'School', 'Family'"
+            ),
+            "mastered_words": types.Schema(
+                type="ARRAY",
+                items=types.Schema(type="STRING"),
+                description="List of words the child pronounced or used well"
+            ),
+            "needs_practice": types.Schema(
+                type="ARRAY",
+                items=types.Schema(type="STRING"),
+                description="List of words the child struggled with or should practice again"
+            )
+        },
+        required=["topic"]
+    )
+)
+
+safe_search_tool_decl = types.FunctionDeclaration(
+    name="safe_kid_search",
+    description="Search child-safe encyclopedia for interesting facts about animals, science, nature, space, or history for kids.",
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "query": types.Schema(
+                type="STRING",
+                description="The kid-friendly search query, e.g. 'how big is a blue whale', 'why are flamingos pink'"
+            )
+        },
+        required=["query"]
+    )
+)
+
+LIVE_TOOLS = [
+    types.Tool(function_declarations=[
+        save_fact_tool_decl,
+        record_learning_tool_decl,
+        safe_search_tool_decl
+    ])
+]
 
 HTML_TEST_PAGE = """
 <!DOCTYPE html>
@@ -155,9 +232,10 @@ HTML_TEST_PAGE = """
         let audioContext = null;
         let micStream = null;
         let micAudioCtx = null;
-        let scriptProcessor = null;
+        let workletNode = null;
         let isSessionActive = false;
         let nextPlayTime = 0;
+        let playbackCheckInterval = null;
 
         const talkBtn = document.getElementById('talkBtn');
         const statusPill = document.getElementById('statusPill');
@@ -242,6 +320,25 @@ HTML_TEST_PAGE = """
             }
         }
 
+        let isAiSpeaking = false;
+        let lastPlaybackEndTime = 0;
+
+        function checkPlaybackState() {
+            if (!audioContext) return;
+            const isPlaying = audioContext.currentTime < nextPlayTime;
+            if (isPlaying) {
+                isAiSpeaking = true;
+                lastPlaybackEndTime = Date.now();
+            } else if (isAiSpeaking && audioContext.currentTime >= nextPlayTime) {
+                isAiSpeaking = false;
+                lastPlaybackEndTime = Date.now();
+                setMouthAmplitude(0);
+                if (isSessionActive) {
+                    setStatus('listening', 'Đang lắng nghe bé nói...');
+                }
+            }
+        }
+
         async function startSession() {
             try {
                 setStatus('connecting', 'Đang kết nối tới server...');
@@ -264,6 +361,9 @@ HTML_TEST_PAGE = """
                     isSessionActive = true;
                     talkBtn.innerHTML = "🛑 Dừng trò chuyện";
                     talkBtn.className = "w-full py-4 px-6 rounded-2xl bg-rose-500 hover:bg-rose-600 transition font-bold text-lg text-white shadow-lg shadow-rose-500/30 flex items-center justify-center gap-2";
+                    
+                    if (playbackCheckInterval) clearInterval(playbackCheckInterval);
+                    playbackCheckInterval = setInterval(checkPlaybackState, 80);
                 };
 
                 ws.onmessage = (event) => {
@@ -277,10 +377,14 @@ HTML_TEST_PAGE = """
                                 alert("Lỗi từ server: " + json.error);
                                 stopSession();
                             } else if (json.event === 'turn_complete') {
-                                setStatus('listening', 'Đang lắng nghe bé nói...');
-                                setMouthAmplitude(0);
+                                // Model đã sinh xong audio
+                            } else if (json.event === 'waiting_for_input') {
+                                setStatus('listening', 'Robo đang đợi bé nói tiếp...');
                             } else if (json.event === 'interrupted') {
-                                setStatus('listening', 'Bé vừa ngắt lời, Robo đang nghe...');
+                                // Bé ngắt lời -> Dừng phát ngay lập tức (Zero-latency barge-in flush)
+                                nextPlayTime = audioContext ? audioContext.currentTime : 0;
+                                isAiSpeaking = false;
+                                setStatus('listening', 'Bé vừa ngắt lời, Robo đang lắng nghe...');
                                 setMouthAmplitude(0);
                             }
                         } catch(e) {}
@@ -336,11 +440,33 @@ HTML_TEST_PAGE = """
             return result;
         }
 
-        let isUserSpeaking = false;
-        let lastSpeechTime = 0;
-        let silencePadding = 0;
-        const SPEECH_THRESHOLD = 0.015;  // Ngưỡng phát hiện tiếng nói
-        const SILENCE_TIMEOUT_MS = 1200; // 1.2s im lặng -> kết thúc lượt nói
+        // AudioWorklet Code chạy trên Audio Rendering Thread độc lập (High Priority)
+        const workletCode = `
+            class PcmCaptureProcessor extends AudioWorkletProcessor {
+                constructor() {
+                    super();
+                    this.bufferSize = 2048;
+                    this.buffer = new Float32Array(this.bufferSize);
+                    this.bufferIndex = 0;
+                }
+
+                process(inputs, outputs, parameters) {
+                    const input = inputs[0];
+                    if (input && input.length > 0) {
+                        const channelData = input[0];
+                        for (let i = 0; i < channelData.length; i++) {
+                            this.buffer[this.bufferIndex++] = channelData[i];
+                            if (this.bufferIndex >= this.bufferSize) {
+                                this.port.postMessage(this.buffer.slice(0, this.bufferSize));
+                                this.bufferIndex = 0;
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+            registerProcessor('pcm-capture-processor', PcmCaptureProcessor);
+        `;
 
         async function startMicrophone() {
             micStream = await navigator.mediaDevices.getUserMedia({
@@ -351,22 +477,26 @@ HTML_TEST_PAGE = """
                     autoGainControl: true
                 }
             });
+
             micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const actualSampleRate = micAudioCtx.sampleRate;
+
+            // Load AudioWorklet Processor dynamically qua Blob URL
+            const blob = new Blob([workletCode], { type: 'application/javascript' });
+            const workletUrl = URL.createObjectURL(blob);
+            await micAudioCtx.audioWorklet.addModule(workletUrl);
+
             const source = micAudioCtx.createMediaStreamSource(micStream);
+            workletNode = new AudioWorkletNode(micAudioCtx, 'pcm-capture-processor');
 
-            scriptProcessor = micAudioCtx.createScriptProcessor(4096, 1, 1);
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(micAudioCtx.destination);
+            source.connect(workletNode);
+            workletNode.connect(micAudioCtx.destination);
 
-            isUserSpeaking = false;
-            lastSpeechTime = 0;
-
-            scriptProcessor.onaudioprocess = (e) => {
+            workletNode.port.onmessage = (event) => {
                 if (!isSessionActive || !ws || ws.readyState !== WebSocket.OPEN) return;
-                const inputData = e.inputBuffer.getChannelData(0);
-                
-                // Tính âm lượng mic hiển thị trực quan
+                const inputData = event.data;
+
+                // Tính năng lượng RMS cho thanh hiển thị âm lượng
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) {
                     sum += inputData[i] * inputData[i];
@@ -374,35 +504,18 @@ HTML_TEST_PAGE = """
                 const rms = Math.sqrt(sum / inputData.length);
                 micVolumeBar.style.width = Math.min(100, Math.round(rms * 400)) + '%';
 
-                const now = Date.now();
+                const isCurrentlyPlaying = audioContext && (audioContext.currentTime < nextPlayTime);
+                const isCooldown = (Date.now() - lastPlaybackEndTime) < 350;
 
-                if (rms > SPEECH_THRESHOLD) {
-                    // Bé đang nói
-                    lastSpeechTime = now;
-                    silencePadding = 6; // Đệm 6 frames (~0.5s) khi dứt lời
-                    if (!isUserSpeaking) {
-                        isUserSpeaking = true;
-                        setStatus('listening', 'Đang lắng nghe bé nói...');
-                    }
-                    const pcm16 = downsampleTo16k(inputData, actualSampleRate);
-                    ws.send(pcm16.buffer);
-                } else {
-                    // Yên lặng / Dừng nói
-                    if (isUserSpeaking) {
-                        if (now - lastSpeechTime < SILENCE_TIMEOUT_MS) {
-                            // Vẫn trong khoảng nghỉ 1.2s -> tiếp tục gửi một chút đệm để không mất âm đuôi
-                            if (silencePadding > 0) {
-                                silencePadding--;
-                                const pcm16 = downsampleTo16k(inputData, actualSampleRate);
-                                ws.send(pcm16.buffer);
-                            }
-                        } else {
-                            // Đã dừng nói quá 1.2s -> Chuyển sang đang suy nghĩ và ngừng gửi silence!
-                            isUserSpeaking = false;
-                            setStatus('thinking', 'Robo đang suy nghĩ...');
-                        }
-                    }
+                // Kiểm tra xem có đang bị vọng âm loa không
+                if (isCurrentlyPlaying && rms < 0.08) {
+                    // Âm thanh nhỏ từ loa dội vào micro -> bỏ qua để không tự ngắt lời
+                    return;
                 }
+
+                // Chuyển đổi sang 16kHz PCM và stream liên tục lên Gemini Server
+                const pcm16 = downsampleTo16k(inputData, actualSampleRate);
+                ws.send(pcm16.buffer);
             };
         }
 
@@ -433,9 +546,10 @@ HTML_TEST_PAGE = """
 
         function stopSession() {
             isSessionActive = false;
+            if (playbackCheckInterval) { clearInterval(playbackCheckInterval); playbackCheckInterval = null; }
             setMouthAmplitude(0);
             micVolumeBar.style.width = '0%';
-            if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
+            if (workletNode) { workletNode.disconnect(); workletNode = null; }
             if (micAudioCtx) { micAudioCtx.close(); micAudioCtx = null; }
             if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
             if (ws) { ws.close(); ws = null; }
@@ -448,6 +562,8 @@ HTML_TEST_PAGE = """
 </body>
 </html>
 """
+
+# ==================== Parental & COPPA REST APIs ====================
 
 @app.get("/", response_class=HTMLResponse)
 def serve_web_test_page():
@@ -462,6 +578,31 @@ def health_check():
         "has_api_key": bool(GEMINI_API_KEY)
     }
 
+@app.get("/api/child/profile")
+def get_child_profile(child_id: str = "default_child"):
+    """Lấy thông tin hồ sơ của bé (Dành cho phụ huynh)"""
+    return memory_manager.get_or_create_profile(child_id)
+
+@app.post("/api/child/profile")
+def update_child_profile(data: dict, child_id: str = "default_child"):
+    """Phụ huynh trực tiếp cập nhật thông tin bé (tên, tuổi, sở thích)"""
+    for k, v in data.items():
+        memory_manager.update_profile_fact(child_id, k, v)
+    return {"status": "success", "profile": memory_manager.get_or_create_profile(child_id)}
+
+@app.get("/api/child/export")
+def export_child_data(child_id: str = "default_child"):
+    """Xuất toàn bộ dữ liệu của bé (Tuân thủ quyền riêng tư COPPA/GDPR)"""
+    return memory_manager.export_child_data(child_id)
+
+@app.delete("/api/child/data")
+def delete_child_data(child_id: str = "default_child"):
+    """Xóa vĩnh viễn toàn bộ dữ liệu của bé (Quyền được lãng quên)"""
+    memory_manager.delete_all_child_data(child_id)
+    return {"status": "deleted", "message": "All data permanently removed."}
+
+# ==================== WebSocket Live Gemini Session ====================
+
 @app.websocket("/ws/live")
 async def websocket_live_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -472,8 +613,14 @@ async def websocket_live_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
+    child_id = "default_child"
+
     try:
         client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"})
+
+        # Xây dựng System Prompt động kết hợp Living Memory
+        dynamic_memory_context = memory_manager.build_memory_context(child_id)
+        full_system_prompt = f"{BASE_SYSTEM_PROMPT}\n\n{dynamic_memory_context}"
 
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
@@ -484,11 +631,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     )
                 )
             ),
-            system_instruction=types.Content(parts=[types.Part(text=SYSTEM_PROMPT)])
+            system_instruction=types.Content(parts=[types.Part(text=full_system_prompt)]),
+            tools=LIVE_TOOLS,
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                    prefix_padding_ms=300,
+                    silence_duration_ms=1000
+                )
+            )
         )
 
         async with client.aio.live.connect(model=MODEL_NAME, config=config) as session:
-            logger.info("Connected to Google Gemini Live API session successfully.")
+            logger.info("Connected to Google Gemini Live API session with Tools & Server VAD successfully.")
             await websocket.send_text(json.dumps({"status": "ready", "voice": "Puck"}))
 
             # Task 1: Nhận audio từ Client -> Gửi qua send_realtime_input
@@ -498,26 +655,76 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         message = await websocket.receive()
                         if "bytes" in message and message["bytes"]:
                             audio_bytes = message["bytes"]
-                            # Dùng đúng API chuẩn send_realtime_input với types.Blob
-                            await session.send_realtime_input(
-                                media=types.Blob(
-                                    data=audio_bytes,
-                                    mime_type="audio/pcm;rate=16000"
+                            # Gửi audio stream vào Gemini Live API với types.Blob
+                            try:
+                                await session.send_realtime_input(
+                                    audio=types.Blob(
+                                        data=audio_bytes,
+                                        mime_type="audio/pcm;rate=16000"
+                                    )
                                 )
-                            )
+                            except TypeError:
+                                # Fallback cho phiên bản SDK cũ hơn dùng 'media'
+                                await session.send_realtime_input(
+                                    media=types.Blob(
+                                        data=audio_bytes,
+                                        mime_type="audio/pcm;rate=16000"
+                                    )
+                                )
                         elif "text" in message and message["text"]:
                             payload = json.loads(message["text"])
                             if payload.get("action") == "interrupt":
-                                logger.info("Client requested interrupt.")
+                                logger.info("Client requested explicit interrupt.")
                 except WebSocketDisconnect:
-                    logger.info("Client disconnected.")
+                    logger.info("Client disconnected from WebSocket.")
+                except asyncio.CancelledError:
+                    pass
                 except Exception as e:
                     logger.error(f"Error in receive_from_client: {e}")
 
-            # Task 2: Nhận audio từ Gemini -> Forward về Client
+            # Task 2: Nhận audio & Tool Call từ Gemini -> Xử lý và Forward về Client
             async def receive_from_gemini():
                 try:
                     async for response in session.receive():
+                        # A. Xử lý Function Calling (Tool Calls) từ Gemini Live
+                        if response.tool_call:
+                            for call in response.tool_call.function_calls:
+                                call_id = call.id
+                                fn_name = call.name
+                                fn_args = call.args or {}
+                                logger.info(f"Gemini Live triggered tool: {fn_name} with args: {fn_args}")
+
+                                tool_output_text = "Done"
+                                try:
+                                    if fn_name == "save_child_fact":
+                                        key = fn_args.get("key", "")
+                                        val = fn_args.get("value", "")
+                                        if key and val:
+                                            memory_manager.update_profile_fact(child_id, key, val)
+                                            tool_output_text = f"Successfully saved fact '{key}: {val}' to child memory."
+                                    elif fn_name == "record_learning_progress":
+                                        topic = fn_args.get("topic", "General")
+                                        mastered = fn_args.get("mastered_words", [])
+                                        practice = fn_args.get("needs_practice", [])
+                                        memory_manager.update_learning_progress(child_id, topic, mastered, practice)
+                                        tool_output_text = f"Updated learning progress for topic '{topic}'."
+                                    elif fn_name == "safe_kid_search":
+                                        query = fn_args.get("query", "")
+                                        search_res = await safety_guard.safe_kid_search(query, child_id)
+                                        tool_output_text = search_res.get("summary") or search_res.get("safe_message", "No info found")
+                                except Exception as tool_err:
+                                    logger.error(f"Error executing tool {fn_name}: {tool_err}")
+                                    tool_output_text = f"Tool execution completed."
+
+                                # Gửi phản hồi FunctionResponse lại cho Gemini Live session
+                                fn_response = types.FunctionResponse(
+                                    name=fn_name,
+                                    response={"output": tool_output_text},
+                                    id=call_id
+                                )
+                                await session.send_tool_response(function_responses=[fn_response])
+
+                        # B. Xử lý Server Content (Model Turn, Audio Output)
                         server_content = response.server_content
                         if server_content is not None:
                             if server_content.model_turn:
@@ -526,15 +733,33 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         await websocket.send_bytes(part.inline_data.data)
 
                             if server_content.turn_complete:
+                                logger.info("Gemini turn_complete received.")
                                 await websocket.send_text(json.dumps({"event": "turn_complete"}))
 
                             if server_content.interrupted:
+                                logger.info("Gemini interrupted event received.")
                                 await websocket.send_text(json.dumps({"event": "interrupted"}))
 
+                            if server_content.waiting_for_input:
+                                logger.info("Gemini waiting_for_input event received.")
+                                await websocket.send_text(json.dumps({"event": "waiting_for_input"}))
+
+                except WebSocketDisconnect:
+                    logger.info("Client disconnected during gemini receive.")
+                except asyncio.CancelledError:
+                    pass
                 except Exception as e:
                     logger.error(f"Error in receive_from_gemini: {e}")
 
-            await asyncio.gather(receive_from_client(), receive_from_gemini())
+            client_task = asyncio.create_task(receive_from_client())
+            gemini_task = asyncio.create_task(receive_from_gemini())
+
+            done, pending = await asyncio.wait(
+                [client_task, gemini_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
 
     except Exception as e:
         logger.error(f"WebSocket session error: {e}")
@@ -552,3 +777,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     logger.info(f"Starting server at http://localhost:{port}")
     uvicorn.run("main:app", host=host, port=port, reload=True)
+

@@ -4,6 +4,9 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -12,11 +15,12 @@ import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
 /**
- * Thu âm giọng nói từ Micro của Android theo chuẩn Gemini Live API:
+ * Thu âm giọng nói từ Micro của Android theo chuẩn Gemini Live API & Google Audio Architecture:
  * - Sample Rate: 16,000 Hz (16kHz)
  * - Channel: Mono (1 kênh)
  * - Encoding: PCM 16-bit (Little Endian)
- * - Tích hợp bộ ngắt khoảng lặng thông minh (Smart VAD Silence Gate) 1.2s
+ * - Tích hợp Hardware Acoustic Echo Canceler (AEC), Noise Suppressor (NS), Automatic Gain Control (AGC).
+ * - Quản lý trôi chảy luồng âm thanh theo Gemini Live Server-side VAD.
  */
 class AudioRecorder(
     private val onAudioChunk: (ByteArray) -> Unit,
@@ -29,17 +33,26 @@ class AudioRecorder(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE = 3200 // ~100ms
-        const val SPEECH_THRESHOLD = 0.02f
-        const val SILENCE_TIMEOUT_MS = 1200L // 1.2 giây dừng nói
     }
 
     private var audioRecord: AudioRecord? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var gainControl: AutomaticGainControl? = null
+
     private var recordingJob: Job? = null
     private var isRecording = false
 
-    private var isUserSpeaking = false
-    private var lastSpeechTime = 0L
-    private var silencePadding = 0
+    @Volatile
+    var isPlaybackActive = false
+        set(value) {
+            field = value
+            if (!value) {
+                lastPlaybackEndTime = System.currentTimeMillis()
+            }
+        }
+
+    private var lastPlaybackEndTime = 0L
 
     @SuppressLint("MissingPermission")
     fun startRecording(scope: CoroutineScope) {
@@ -62,10 +75,32 @@ class AudioRecorder(
             return
         }
 
+        // Kích hoạt chống vọng âm và khử nhiễu phần cứng (Hardware AEC & NS)
+        val sessionId = audioRecord?.audioSessionId ?: 0
+        if (sessionId != 0) {
+            try {
+                if (AcousticEchoCanceler.isAvailable()) {
+                    echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply {
+                        enabled = true
+                    }
+                }
+                if (NoiseSuppressor.isAvailable()) {
+                    noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply {
+                        enabled = true
+                    }
+                }
+                if (AutomaticGainControl.isAvailable()) {
+                    gainControl = AutomaticGainControl.create(sessionId)?.apply {
+                        enabled = true
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
         audioRecord?.startRecording()
         isRecording = true
-        isUserSpeaking = false
-        lastSpeechTime = 0L
 
         recordingJob = scope.launch(Dispatchers.IO) {
             val buffer = ByteArray(CHUNK_SIZE)
@@ -73,35 +108,20 @@ class AudioRecorder(
                 val readBytes = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                 if (readBytes > 0) {
                     val chunk = buffer.copyOf(readBytes)
-                    val volume = calculateRMS(chunk)
-                    onInputVolume(volume)
+                    val rawRms = calculateRawRMS(chunk)
+                    val displayVolume = (rawRms * 4.0f).coerceIn(0.0f, 1.0f)
+                    onInputVolume(displayVolume)
 
-                    val now = System.currentTimeMillis()
+                    val isCurrentlyPlaying = isPlaybackActive
+                    val isCooldown = (System.currentTimeMillis() - lastPlaybackEndTime) < 350L
 
-                    if (volume > SPEECH_THRESHOLD) {
-                        // Bé đang nói
-                        lastSpeechTime = now
-                        silencePadding = 5
-                        if (!isUserSpeaking) {
-                            isUserSpeaking = true
-                            onSpeechStarted()
-                        }
-                        onAudioChunk(chunk)
-                    } else {
-                        // Bé tạm dừng nói
-                        if (isUserSpeaking) {
-                            if (now - lastSpeechTime < SILENCE_TIMEOUT_MS) {
-                                if (silencePadding > 0) {
-                                    silencePadding--
-                                    onAudioChunk(chunk)
-                                }
-                            } else {
-                                // Đã dừng nói 1.2s -> Kích hoạt suy nghĩ và ngắt gửi silence
-                                isUserSpeaking = false
-                                onSpeechEnded()
-                            }
-                        }
+                    // Nếu loa đang phát và âm lượng rất nhỏ (tiếng rò rỉ từ loa) -> bỏ qua để không tự ngắt lời
+                    if (isCurrentlyPlaying && rawRms < 0.08f) {
+                        continue
                     }
+
+                    // Stream trực tiếp lên Gemini Live Server
+                    onAudioChunk(chunk)
                 }
             }
         }
@@ -111,7 +131,15 @@ class AudioRecorder(
         isRecording = false
         recordingJob?.cancel()
         recordingJob = null
+
         try {
+            echoCanceler?.release()
+            echoCanceler = null
+            noiseSuppressor?.release()
+            noiseSuppressor = null
+            gainControl?.release()
+            gainControl = null
+
             audioRecord?.stop()
             audioRecord?.release()
         } catch (e: Exception) {
@@ -120,7 +148,7 @@ class AudioRecorder(
         audioRecord = null
     }
 
-    private fun calculateRMS(audioData: ByteArray): Float {
+    private fun calculateRawRMS(audioData: ByteArray): Float {
         var sum = 0.0
         val shortCount = audioData.size / 2
         for (i in 0 until shortCount) {
@@ -128,7 +156,6 @@ class AudioRecorder(
             val normalized = sample.toShort() / 32768.0f
             sum += normalized * normalized
         }
-        val rms = sqrt(sum / shortCount).toFloat()
-        return (rms * 4.0f).coerceIn(0.0f, 1.0f)
+        return sqrt(sum / shortCount).toFloat()
     }
 }

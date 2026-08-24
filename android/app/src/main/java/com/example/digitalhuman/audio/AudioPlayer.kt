@@ -16,10 +16,12 @@ import kotlin.math.sqrt
  * - Sample Rate: 24,000 Hz (24kHz)
  * - Channel: Mono
  * - Encoding: PCM 16-bit
+ * - Báo cáo trạng thái đang phát (playback state) chính xác cho Echo Gating.
  * - Tính toán biên độ âm lượng thời gian thực để cử động môi Robot.
  */
 class AudioPlayer(
-    private val onOutputAmplitude: (Float) -> Unit = {}
+    private val onOutputAmplitude: (Float) -> Unit = {},
+    private val onPlaybackStateChanged: (Boolean) -> Unit = {}
 ) {
     companion object {
         const val SAMPLE_RATE = 24000
@@ -31,6 +33,10 @@ class AudioPlayer(
     private val audioQueue = ConcurrentLinkedQueue<ByteArray>()
     private var playbackJob: Job? = null
     private var isPlaying = false
+
+    @Volatile
+    var isCurrentlyPlayingAudio = false
+        private set
 
     fun start(scope: CoroutineScope) {
         if (isPlaying) return
@@ -59,9 +65,16 @@ class AudioPlayer(
         isPlaying = true
 
         playbackJob = scope.launch(Dispatchers.IO) {
+            var silentCycles = 0
             while (isActive && isPlaying) {
                 val chunk = audioQueue.poll()
                 if (chunk != null && chunk.isNotEmpty()) {
+                    if (!isCurrentlyPlayingAudio) {
+                        isCurrentlyPlayingAudio = true
+                        onPlaybackStateChanged(true)
+                    }
+                    silentCycles = 0
+
                     audioTrack?.write(chunk, 0, chunk.size)
 
                     // Tính biên độ âm lượng để nhép môi Robot
@@ -69,6 +82,15 @@ class AudioPlayer(
                     onOutputAmplitude(amplitude)
                 } else {
                     onOutputAmplitude(0f)
+                    if (isCurrentlyPlayingAudio) {
+                        silentCycles++
+                        // Sau ~100ms không có thêm audio chunk mới -> Hoàn tất phát
+                        if (silentCycles > 10) {
+                            isCurrentlyPlayingAudio = false
+                            onPlaybackStateChanged(false)
+                            silentCycles = 0
+                        }
+                    }
                     Thread.sleep(10)
                 }
             }
@@ -91,11 +113,14 @@ class AudioPlayer(
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        isCurrentlyPlayingAudio = false
         onOutputAmplitude(0f)
+        onPlaybackStateChanged(false)
     }
 
     fun release() {
         isPlaying = false
+        isCurrentlyPlayingAudio = false
         playbackJob?.cancel()
         playbackJob = null
         audioQueue.clear()
@@ -106,6 +131,7 @@ class AudioPlayer(
             e.printStackTrace()
         }
         audioTrack = null
+        onPlaybackStateChanged(false)
     }
 
     private fun calculateRMS(audioData: ByteArray): Float {
@@ -120,3 +146,4 @@ class AudioPlayer(
         return (rms * 3.5f).coerceIn(0.0f, 1.0f)
     }
 }
+

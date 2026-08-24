@@ -7,6 +7,12 @@ venv/
 ENV/
 .env
 .env.local
+backend/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
 
 # Android & Gradle
 .gradle/
