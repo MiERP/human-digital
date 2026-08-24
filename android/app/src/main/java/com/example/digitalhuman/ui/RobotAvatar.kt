@@ -5,6 +5,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -55,10 +56,16 @@ fun RobotAvatar(
         initialValue = 1f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = LinearEasing),
+            animation = keyframes {
+                durationMillis = 4000
+                1f at 0
+                1f at 3700
+                0.1f at 3800
+                1f at 3900
+                1f at 4000
+            },
             repeatMode = RepeatMode.Restart
-        ),
-        label = "eye_blink"
+        ), label = "eyeBlink"
     )
 
     // Hiệu ứng sóng ăng-ten khi lắng nghe
@@ -207,7 +214,7 @@ fun RobotAvatar(
                 )
             } else {
                 // Mắt tròn to tròn thông minh
-                val eyeScaleY = if (state == ConnectionState.IDLE) eyeBlink else 1.0f
+                val eyeScaleY = eyeBlink
                 drawOval(
                     color = eyeColor,
                     topLeft = Offset(center.x - eyeSpacing - 10.dp.toPx(), eyeY - (12.dp.toPx() * eyeScaleY)),

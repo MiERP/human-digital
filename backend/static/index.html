@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robo English Buddy - Test Trực Tiếp</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-12px); }
+        }
+        .robot-float { animation: float 3s ease-in-out infinite; }
+    </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-between p-6 font-sans">
+    
+    <!-- Header -->
+    <header class="text-center mt-2">
+        <h1 class="text-2xl md:text-3xl font-black tracking-wider text-cyan-400">🤖 ROBO ENGLISH BUDDY</h1>
+        <p class="text-slate-400 text-sm mt-1">Trợ lý AI Digital Human luyện tiếng Anh cho trẻ em</p>
+        <div id="statusPill" class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-slate-800 text-slate-300 border border-slate-700">
+            <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+            <span id="statusText">Chưa kết nối</span>
+        </div>
+    </header>
+
+    <!-- Robot Avatar SVG -->
+    <main class="my-auto flex flex-col items-center">
+        <div class="relative w-64 h-64 robot-float">
+            <!-- Glow background -->
+            <div id="glowRing" class="absolute inset-0 bg-cyan-500/20 rounded-full blur-xl transition-all duration-300"></div>
+
+            <svg viewBox="0 0 200 200" class="w-full h-full relative z-10 drop-shadow-2xl">
+                <!-- Antenna -->
+                <line x1="100" y1="50" x2="100" y2="25" stroke="#94A3B8" stroke-width="4" stroke-linecap="round"/>
+                <circle id="antennaTip" cx="100" cy="20" r="8" fill="#06B6D4" class="transition-colors duration-300"/>
+                
+                <!-- Ears -->
+                <rect x="26" y="80" width="12" height="36" rx="6" fill="#3B82F6"/>
+                <rect x="162" y="80" width="12" height="36" rx="6" fill="#3B82F6"/>
+
+                <!-- Head Shell -->
+                <rect x="36" y="46" width="128" height="110" rx="32" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="3"/>
+
+                <!-- Face Screen -->
+                <rect x="52" y="62" width="96" height="74" rx="20" fill="#0F172A"/>
+
+                <!-- Blush -->
+                <circle cx="68" cy="116" r="6" fill="#FB7185" opacity="0.6"/>
+                <circle cx="132" cy="116" r="6" fill="#FB7185" opacity="0.6"/>
+
+                <!-- Left Eye -->
+                <g id="leftEye">
+                    <ellipse id="leftEyeRound" cx="78" cy="94" rx="9" ry="11" fill="#38BDF8"/>
+                    <path id="leftEyeHappy" d="M 69 96 Q 78 86 87 96" stroke="#38BDF8" stroke-width="3.5" fill="none" stroke-linecap="round" class="hidden"/>
+                </g>
+
+                <!-- Right Eye -->
+                <g id="rightEye">
+                    <ellipse id="rightEyeRound" cx="122" cy="94" rx="9" ry="11" fill="#38BDF8"/>
+                    <path id="rightEyeHappy" d="M 113 96 Q 122 86 131 96" stroke="#38BDF8" stroke-width="3.5" fill="none" stroke-linecap="round" class="hidden"/>
+                </g>
+
+                <!-- Mouth -->
+                <rect id="mouthRect" x="88" y="114" width="24" height="4" rx="2" fill="#38BDF8" class="transition-all duration-75"/>
+            </svg>
+        </div>
+
+        <!-- Mic visualizer bar -->
+        <div class="w-48 bg-slate-800 rounded-full h-2 mt-4 overflow-hidden border border-slate-700">
+            <div id="micVolumeBar" class="bg-emerald-400 h-full w-0 transition-all duration-75"></div>
+        </div>
+
+        <div id="hintCard" class="mt-3 px-6 py-2.5 bg-slate-800/80 backdrop-blur rounded-xl border border-slate-700 max-w-md text-center text-sm text-slate-300">
+            Nhấn nút <span class="text-emerald-400 font-bold">"Bắt đầu nói chuyện"</span> bên dưới để luyện tiếng Anh cùng bạn Robo!
+        </div>
+    </main>
+
+    <!-- Controls -->
+    <footer class="w-full max-w-md mb-4 flex flex-col gap-3">
+        <button id="talkBtn" onclick="toggleSession()" class="w-full py-4 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-600 active:scale-98 transition font-bold text-lg text-white shadow-lg shadow-emerald-500/30 flex items-center justify-center gap-2">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+            Bắt đầu nói chuyện với Robo
+        </button>
+        <p class="text-xs text-center text-slate-500">
+            Sử dụng Google Gemini Live Audio (WebSocket 2-chiều) • Native 2D Canvas Lip-sync
+        </p>
+    </footer>
+
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let micStream = null;
+        let micAudioCtx = null;
+        let workletNode = null;
+        let isSessionActive = false;
+        let scheduledEndTime = 0;
+        let isAiSpeaking = false;
+        let lastPlaybackEndTime = 0;
+        let playbackCheckInterval = null;
+
+        // Client-side VAD state (energy-based) — bắt buộc vì backend đang ở CLIENT_VAD_MODE
+        // và Gemini sẽ im lặng nếu không thấy activity_start/activity_end markers.
+        let vadState = 'silence';           // 'silence' | 'speech'
+        let silenceFrames = 0;              // đếm số frame im lặng liên tiếp
+        const SILENCE_RMS_THRESHOLD = 0.015; // dưới ngưỡng này coi như im lặng
+        const SPEECH_RMS_THRESHOLD  = 0.035; // trên ngưỡng này chắc chắn là speech
+        const SILENCE_FRAMES_TO_END = 18;    // ~900ms ở 50fps để fire activity_end (trẻ em pause-suy-nghĩ)
+
+        // Jitter Buffer & Seamless Audio Scheduler State
+        let activeSources = [];
+        let pcmJitterQueue = [];
+        let isBufferingInitialTurn = true;
+
+        const talkBtn = document.getElementById('talkBtn');
+        const statusPill = document.getElementById('statusPill');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const hintCard = document.getElementById('hintCard');
+        const mouthRect = document.getElementById('mouthRect');
+        const antennaTip = document.getElementById('antennaTip');
+        const glowRing = document.getElementById('glowRing');
+        const leftEyeRound = document.getElementById('leftEyeRound');
+        const leftEyeHappy = document.getElementById('leftEyeHappy');
+        const rightEyeRound = document.getElementById('rightEyeRound');
+        const rightEyeHappy = document.getElementById('rightEyeHappy');
+        const micVolumeBar = document.getElementById('micVolumeBar');
+
+        function setStatus(state, text) {
+            statusText.innerText = text;
+            if (state === 'connected' || state === 'ready') {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-emerald-950/80 text-emerald-300 border border-emerald-800';
+                antennaTip.setAttribute('fill', '#10B981');
+                glowRing.className = 'absolute inset-0 bg-emerald-500/20 rounded-full blur-xl';
+                setEyes('round');
+            } else if (state === 'thinking') {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
+                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-amber-950/80 text-amber-300 border border-amber-800';
+                antennaTip.setAttribute('fill', '#F59E0B');
+                glowRing.className = 'absolute inset-0 bg-amber-500/30 rounded-full blur-xl';
+                setEyes('round');
+            } else if (state === 'speaking') {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping';
+                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-cyan-950/80 text-cyan-300 border border-cyan-800';
+                antennaTip.setAttribute('fill', '#06B6D4');
+                glowRing.className = 'absolute inset-0 bg-cyan-500/30 rounded-full blur-xl';
+                setEyes('happy');
+            } else if (state === 'listening') {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-teal-400';
+                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-teal-950/80 text-teal-300 border border-teal-800';
+                antennaTip.setAttribute('fill', '#14B8A6');
+                glowRing.className = 'absolute inset-0 bg-teal-500/20 rounded-full blur-xl';
+                setEyes('round');
+            } else if (state === 'error') {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500';
+                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-rose-950/80 text-rose-300 border border-rose-800';
+                antennaTip.setAttribute('fill', '#F43F5E');
+                setEyes('round');
+            } else {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
+                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-slate-800 text-slate-300 border border-slate-700';
+                antennaTip.setAttribute('fill', '#64748B');
+                setEyes('round');
+            }
+        }
+
+        function setEyes(mode) {
+            if (mode === 'happy') {
+                leftEyeRound.classList.add('hidden');
+                rightEyeRound.classList.add('hidden');
+                leftEyeHappy.classList.remove('hidden');
+                rightEyeHappy.classList.remove('hidden');
+            } else {
+                leftEyeRound.classList.remove('hidden');
+                rightEyeRound.classList.remove('hidden');
+                leftEyeHappy.classList.add('hidden');
+                rightEyeHappy.classList.add('hidden');
+            }
+        }
+
+        function setMouthAmplitude(amp) {
+            const h = Math.min(24, Math.max(4, amp * 40));
+            const y = 116 - (h / 2);
+            mouthRect.setAttribute('height', h);
+            mouthRect.setAttribute('y', y);
+            mouthRect.setAttribute('rx', h / 2);
+        }
+
+        async function toggleSession() {
+            if (!isSessionActive) {
+                startSession();
+            } else {
+                stopSession();
+            }
+        }
+
+        function checkPlaybackState() {
+            if (!audioContext) return;
+            const isPlaying = audioContext.currentTime < scheduledEndTime;
+            if (isPlaying) {
+                isAiSpeaking = true;
+                lastPlaybackEndTime = Date.now();
+            } else if (isAiSpeaking && audioContext.currentTime >= scheduledEndTime) {
+                isAiSpeaking = false;
+                lastPlaybackEndTime = Date.now();
+                setMouthAmplitude(0);
+                isBufferingInitialTurn = true;
+                if (isSessionActive) {
+                    setStatus('listening', 'Đang lắng nghe bé nói...');
+                }
+            }
+        }
+
+        function resetAudioPipeline() {
+            activeSources.forEach(s => {
+                try { s.stop(); } catch(e) {}
+            });
+            activeSources = [];
+            pcmJitterQueue = [];
+            if (audioContext) {
+                scheduledEndTime = audioContext.currentTime;
+            } else {
+                scheduledEndTime = 0;
+            }
+            isBufferingInitialTurn = true;
+            isAiSpeaking = false;
+            setMouthAmplitude(0);
+        }
+
+        function enqueueIncomingPcm(arrayBuffer) {
+            if (!audioContext) return;
+            const pcm16 = new Int16Array(arrayBuffer);
+            if (pcm16.length === 0) return;
+
+            const float32 = new Float32Array(pcm16.length);
+            let sum = 0;
+            for (let i = 0; i < pcm16.length; i++) {
+                float32[i] = pcm16[i] / 32768.0;
+                sum += float32[i] * float32[i];
+            }
+            const rms = Math.sqrt(sum / pcm16.length);
+            setMouthAmplitude(rms);
+
+            pcmJitterQueue.push(float32);
+            scheduleQueuedAudio();
+        }
+
+        function scheduleQueuedAudio() {
+            if (!audioContext || pcmJitterQueue.length === 0) return;
+
+            // Pre-buffer 80ms (~1920 samples) ở đầu mỗi lượt để triệt tiêu hiện tượng rách âm / gián đoạn
+            if (isBufferingInitialTurn) {
+                let totalBufferedSamples = 0;
+                for (let chunk of pcmJitterQueue) {
+                    totalBufferedSamples += chunk.length;
+                }
+                if (totalBufferedSamples < 1920 && pcmJitterQueue.length < 2) {
+                    return;
+                }
+                isBufferingInitialTurn = false;
+                scheduledEndTime = Math.max(audioContext.currentTime + 0.05, scheduledEndTime);
+            }
+
+            while (pcmJitterQueue.length > 0) {
+                const float32 = pcmJitterQueue.shift();
+                const buffer = audioContext.createBuffer(1, float32.length, 24000);
+                buffer.getChannelData(0).set(float32);
+
+                const source = audioContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioContext.destination);
+
+                const startTime = Math.max(audioContext.currentTime, scheduledEndTime);
+                source.start(startTime);
+                scheduledEndTime = startTime + buffer.duration;
+
+                activeSources.push(source);
+                source.onended = () => {
+                    const idx = activeSources.indexOf(source);
+                    if (idx > -1) activeSources.splice(idx, 1);
+                };
+            }
+        }
+
+        async function startSession() {
+            try {
+                setStatus('connecting', 'Đang kết nối tới server...');
+                hintCard.innerHTML = "Đang kết nối tới Google Gemini Live...";
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+                scheduledEndTime = audioContext.currentTime;
+                resetAudioPipeline();
+
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/live`);
+                ws.binaryType = 'arraybuffer';
+
+                ws.onopen = async () => {
+                    setStatus('connected', 'Đã kết nối!');
+                    hintCard.innerHTML = "Robo đang lắng nghe! Bạn hãy nói <b>Hello Robo!</b> hoặc chào hỏi tiếng Việt nhé!";
+                    await startMicrophone();
+                    isSessionActive = true;
+                    talkBtn.innerHTML = "🛑 Dừng trò chuyện";
+                    talkBtn.className = "w-full py-4 px-6 rounded-2xl bg-rose-500 hover:bg-rose-600 transition font-bold text-lg text-white shadow-lg shadow-rose-500/30 flex items-center justify-center gap-2";
+                    
+                    if (playbackCheckInterval) clearInterval(playbackCheckInterval);
+                    playbackCheckInterval = setInterval(checkPlaybackState, 50);
+                };
+
+                ws.onmessage = (event) => {
+                    if (event.data instanceof ArrayBuffer) {
+                        enqueueIncomingPcm(event.data);
+                        setStatus('speaking', 'Robo đang nói chuyện...');
+                    } else {
+                        try {
+                            const json = JSON.parse(event.data);
+                            if (json.error) {
+                                alert("Lỗi từ server: " + json.error);
+                                stopSession();
+                            } else if (json.event === 'turn_complete') {
+                                scheduleQueuedAudio();
+                            } else if (json.event === 'waiting_for_input') {
+                                setStatus('listening', 'Robo đang đợi bé nói tiếp...');
+                            } else if (json.event === 'interrupted') {
+                                resetAudioPipeline();
+                                setStatus('listening', 'Bé vừa ngắt lời, Robo đang lắng nghe...');
+                            }
+                        } catch(e) {}
+                    }
+                };
+
+                ws.onerror = (err) => {
+                    console.error("WS Error:", err);
+                    setStatus('error', 'Lỗi kết nối WebSocket');
+                    stopSession();
+                };
+
+                ws.onclose = () => {
+                    setStatus('disconnected', 'Đã ngắt kết nối');
+                    stopSession();
+                };
+
+            } catch (err) {
+                console.error("Start session error:", err);
+                alert("Lỗi khi mở micro: " + err.message);
+                stopSession();
+            }
+        }
+
+        // Downsample audio sang chuẩn 16,000 Hz và PCM 16-bit
+        function downsampleTo16k(inputData, inputSampleRate) {
+            if (inputSampleRate === 16000) {
+                const pcm16 = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    const s = Math.max(-1, Math.min(1, inputData[i]));
+                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                return pcm16;
+            }
+            const ratio = inputSampleRate / 16000;
+            const newLength = Math.round(inputData.length / ratio);
+            const result = new Int16Array(newLength);
+            let offsetResult = 0;
+            let offsetBuffer = 0;
+            while (offsetResult < result.length) {
+                const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+                let accum = 0, count = 0;
+                for (let i = offsetBuffer; i < nextOffsetBuffer && i < inputData.length; i++) {
+                    accum += inputData[i];
+                    count++;
+                }
+                const sample = count > 0 ? accum / count : 0;
+                const s = Math.max(-1, Math.min(1, sample));
+                result[offsetResult] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                offsetResult++;
+                offsetBuffer = nextOffsetBuffer;
+            }
+            return result;
+        }
+
+        // AudioWorklet Code chạy trên Audio Rendering Thread độc lập (High Priority)
+        const workletCode = `
+            class PcmCaptureProcessor extends AudioWorkletProcessor {
+                constructor() {
+                    super();
+                    this.bufferSize = 2048;
+                    this.buffer = new Float32Array(this.bufferSize);
+                    this.bufferIndex = 0;
+                }
+
+                process(inputs, outputs, parameters) {
+                    const input = inputs[0];
+                    if (input && input.length > 0) {
+                        const channelData = input[0];
+                        for (let i = 0; i < channelData.length; i++) {
+                            this.buffer[this.bufferIndex++] = channelData[i];
+                            if (this.bufferIndex >= this.bufferSize) {
+                                this.port.postMessage(this.buffer.slice(0, this.bufferSize));
+                                this.bufferIndex = 0;
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+            registerProcessor('pcm-capture-processor', PcmCaptureProcessor);
+        `;
+
+        async function startMicrophone() {
+            micStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+
+            micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const actualSampleRate = micAudioCtx.sampleRate;
+
+            // Load AudioWorklet Processor dynamically qua Blob URL
+            const blob = new Blob([workletCode], { type: 'application/javascript' });
+            const workletUrl = URL.createObjectURL(blob);
+            await micAudioCtx.audioWorklet.addModule(workletUrl);
+
+            const source = micAudioCtx.createMediaStreamSource(micStream);
+            workletNode = new AudioWorkletNode(micAudioCtx, 'pcm-capture-processor');
+
+            source.connect(workletNode);
+            workletNode.connect(micAudioCtx.destination);
+
+            workletNode.port.onmessage = (event) => {
+                if (!isSessionActive || !ws || ws.readyState !== WebSocket.OPEN) return;
+                const inputData = event.data;
+
+                // Tính năng lượng RMS cho thanh hiển thị âm lượng + client-side VAD
+                let sum = 0;
+                for (let i = 0; i < inputData.length; i++) {
+                    sum += inputData[i] * inputData[i];
+                }
+                const rms = Math.sqrt(sum / inputData.length);
+                micVolumeBar.style.width = Math.min(100, Math.round(rms * 400)) + '%';
+
+                // Chống vọng âm loa ngoài (AEC Soft-Gating):
+                // Khi Robo đang phát âm thanh ra loa ngoài:
+                // Nếu âm lượng micro thấp (dưới ngưỡng 0.10 do loa ngoài dội vào), bỏ qua để không gửi tiếng của Robo ngược vào server,
+                // tránh việc Gemini hiểu nhầm là người dùng đang ngắt lời và tự hủy lượt trả lời.
+                const isCurrentlyPlaying = audioContext && (audioContext.currentTime < scheduledEndTime);
+                if (isCurrentlyPlaying && rms < 0.10) {
+                    return;
+                }
+
+                // ===== Client-side VAD (energy-based) =====
+                // Phát hiện speech/silence bằng hysteresis để tránh dao động ở ngưỡng biên.
+                if (vadState === 'silence') {
+                    if (rms >= SPEECH_RMS_THRESHOLD) {
+                        vadState = 'speech';
+                        silenceFrames = 0;
+                        try {
+                            ws.send(JSON.stringify({ action: 'activity_start' }));
+                            setStatus('listening', 'Đang lắng nghe bé nói...');
+                        } catch(e) {}
+                    }
+                } else { // 'speech'
+                    if (rms < SILENCE_RMS_THRESHOLD) {
+                        silenceFrames++;
+                        if (silenceFrames >= SILENCE_FRAMES_TO_END) {
+                            vadState = 'silence';
+                            silenceFrames = 0;
+                            try {
+                                ws.send(JSON.stringify({ action: 'activity_end' }));
+                                setStatus('thinking', 'Robo đang suy nghĩ...');
+                            } catch(e) {}
+                        }
+                    } else {
+                        silenceFrames = 0;
+                    }
+                }
+
+                // Chỉ gửi audio khi user đang nói (giữa activity_start và activity_end)
+                // và không spam audio khi silence. Điều này khớp với Gemini manual VAD
+                // expectation: audio chỉ được forward giữa hai markers.
+                if (vadState === 'speech') {
+                    const pcm16 = downsampleTo16k(inputData, actualSampleRate);
+                    ws.send(pcm16.buffer);
+                }
+            };
+        }
+
+        function stopSession() {
+            isSessionActive = false;
+            if (playbackCheckInterval) { clearInterval(playbackCheckInterval); playbackCheckInterval = null; }
+            resetAudioPipeline();
+            micVolumeBar.style.width = '0%';
+            if (workletNode) { workletNode.disconnect(); workletNode = null; }
+            if (micAudioCtx) { micAudioCtx.close(); micAudioCtx = null; }
+            if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+            if (ws) { ws.close(); ws = null; }
+            setStatus('disconnected', 'Chưa kết nối');
+            talkBtn.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg> Bắt đầu nói chuyện với Robo`;
+            talkBtn.className = "w-full py-4 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-600 transition font-bold text-lg text-white shadow-lg shadow-emerald-500/30 flex items-center justify-center gap-2";
+            hintCard.innerHTML = 'Nhấn nút <span class="text-emerald-400 font-bold">"Bắt đầu nói chuyện"</span> bên dưới để luyện tiếng Anh cùng bạn Robo!';
+        }
+    </script>
+</body>
+</html>

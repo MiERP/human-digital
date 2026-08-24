@@ -9,6 +9,7 @@ Dự án trợ lý ảo Digital Human 2D Robot dạy tiếng Anh tương tác th
 ```
 [Điện thoại Android (Kotlin/Compose)]
   │ • AudioRecord (16kHz PCM)
+  │ • Silero VAD on-device (phát hiện nói/không nói)
   │ • 2D Robot Canvas (Lip-sync real-time theo âm lượng)
   │ • AudioTrack (24kHz PCM playback)
   │
@@ -49,6 +50,19 @@ human-digital/
                 ├── RobotAvatar.kt      # 2D Robot vẽ bằng Jetpack Compose
                 └── MainActivity.kt     # Giao diện chính học tiếng Anh
 ```
+
+## ⚙️ Cấu hình Backend (biến môi trường)
+
+| Biến | Mặc định | Mô tả |
+| --- | --- | --- |
+| `GEMINI_VOICE` | `Puck` | Giọng prebuilt Gemini Live (Puck/Charon/Kore/Fenrir/Aoede) |
+| `ENABLE_TRANSCRIPTION` | `true` | Bật transcript input/output để đo lường & debug điểm cắt lượt |
+| `VAD_START_SENSITIVITY` | `high` | Ngưỡng nhận diện bắt đầu nói (`high` = ít nhiễu hơn) |
+| `VAD_END_SENSITIVITY` | `low` | Ngưỡng kết thúc nói (`low` = kết thúc lượt nhanh hơn) |
+| `VAD_SILENCE_DURATION_MS` | `600` | Khoảng im lặng để server kết thúc lượt |
+| `VAD_PREFIX_PADDING_MS` | `300` | Padding trước điểm bắt đầu nói |
+
+Lưu ý: Android hiện dùng **Silero VAD on-device** (`com.github.gkonovalov.android-vad:silero`) để gate luồng audio — chỉ gửi âm thanh lên server khi thực sự có giọng nói, giảm nhiễu, giảm độ trễ và cải thiện khả năng barge-in.
 
 ---
 

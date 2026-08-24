@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.env
+.env.local
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+.pytest_cache/
+
+# Android
+android/
+.gradle/
+build/
+*.iml
+.idea/
+local.properties
+*.apk
+*.aab
+
+# OS & Editor
+.vscode/
+.DS_Store
+Thumbs.db
+.git/
+
+# Data
+backend/data/

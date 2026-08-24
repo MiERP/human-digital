@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.math.sqrt
 
@@ -27,16 +28,29 @@ class AudioPlayer(
         const val SAMPLE_RATE = 24000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+
+        // Pre-buffer mục tiêu ~150ms audio trước khi phát để chống rách tiếng do jitter mạng.
+        private const val BYTES_PER_SECOND = SAMPLE_RATE * 2
+        private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 150 / 1000
+
+        // Không chờ pre-buffer quá lâu để giữ độ trễ hội thoại ở mức thấp.
+        private const val MAX_PREBUFFER_WAIT_MS = 250L
     }
 
     private var audioTrack: AudioTrack? = null
     private val audioQueue = ConcurrentLinkedQueue<ByteArray>()
     private var playbackJob: Job? = null
+    @Volatile
     private var isPlaying = false
 
     @Volatile
     var isCurrentlyPlayingAudio = false
         private set
+
+    @Volatile
+    private var isPreBuffering = true
+
+    private val pendingBytes = AtomicInteger(0)
 
     fun start(scope: CoroutineScope) {
         if (isPlaying) return
@@ -66,9 +80,23 @@ class AudioPlayer(
 
         playbackJob = scope.launch(Dispatchers.IO) {
             var silentCycles = 0
+            isPreBuffering = true
+            var preBufferStartedAt = System.currentTimeMillis()
             while (isActive && isPlaying) {
+                // Pre-buffer đủ ~150ms hoặc hết timeout trước khi phát để triệt tiêu hiện tượng rách âm do độ trễ mạng.
+                if (isPreBuffering) {
+                    val waited = System.currentTimeMillis() - preBufferStartedAt
+                    if (pendingBytes.get() >= MIN_PREBUFFER_BYTES || waited >= MAX_PREBUFFER_WAIT_MS) {
+                        isPreBuffering = false
+                    } else {
+                        kotlinx.coroutines.delay(10)
+                        continue
+                    }
+                }
+
                 val chunk = audioQueue.poll()
                 if (chunk != null && chunk.isNotEmpty()) {
+                    pendingBytes.addAndGet(-chunk.size)
                     if (!isCurrentlyPlayingAudio) {
                         isCurrentlyPlayingAudio = true
                         onPlaybackStateChanged(true)
@@ -84,14 +112,16 @@ class AudioPlayer(
                     onOutputAmplitude(0f)
                     if (isCurrentlyPlayingAudio) {
                         silentCycles++
-                        // Sau ~100ms không có thêm audio chunk mới -> Hoàn tất phát
+                        // Sau ~100ms không có thêm audio chunk mới -> Hoàn tất phát lượt
                         if (silentCycles > 10) {
                             isCurrentlyPlayingAudio = false
                             onPlaybackStateChanged(false)
                             silentCycles = 0
+                            isPreBuffering = true
+                            preBufferStartedAt = System.currentTimeMillis()
                         }
                     }
-                    Thread.sleep(10)
+                    kotlinx.coroutines.delay(10)
                 }
             }
         }
@@ -99,19 +129,24 @@ class AudioPlayer(
 
     fun enqueueAudio(data: ByteArray) {
         audioQueue.add(data)
+        pendingBytes.addAndGet(data.size)
     }
 
     /**
      * Dừng ngay lập tức khi bé ngắt lời (Barge-in / Interrupt)
      */
     fun stopAndFlush() {
-        audioQueue.clear()
-        try {
-            audioTrack?.pause()
-            audioTrack?.flush()
-            audioTrack?.play()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        synchronized(this) {
+            audioQueue.clear()
+            pendingBytes.set(0)
+            isPreBuffering = true
+            try {
+                audioTrack?.pause()
+                audioTrack?.flush()
+                audioTrack?.play()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
         isCurrentlyPlayingAudio = false
         onOutputAmplitude(0f)
@@ -124,6 +159,7 @@ class AudioPlayer(
         playbackJob?.cancel()
         playbackJob = null
         audioQueue.clear()
+        pendingBytes.set(0)
         try {
             audioTrack?.stop()
             audioTrack?.release()

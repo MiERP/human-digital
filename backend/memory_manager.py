@@ -3,7 +3,7 @@ import json
 import sqlite3
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("digital-human-memory")
 
@@ -139,24 +139,31 @@ class MemoryManager:
 
     def update_profile_fact(self, child_id: str, key: str, value: Any) -> bool:
         """Cập nhật một thuộc tính cụ thể trong hồ sơ của bé (từ hội thoại)"""
-        allowed_direct_fields = {
-            "name", "nickname", "age", "grade", "favorite_color",
-            "favorite_animal", "favorite_food", "favorite_character", "learning_level"
+        COLUMN_MAP = {
+            "name": "name",
+            "nickname": "nickname",
+            "age": "age",
+            "grade": "grade",
+            "favorite_color": "favorite_color",
+            "favorite_animal": "favorite_animal",
+            "favorite_food": "favorite_food",
+            "favorite_character": "favorite_character",
+            "learning_level": "learning_level",
         }
-        
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             
             # Đảm bảo profile tồn tại
             self.get_or_create_profile(child_id)
 
-            if key in allowed_direct_fields:
-                cursor.execute(f"""
-                    UPDATE child_profile
-                    SET {key} = ?, updated_at = ?
-                    WHERE child_id = ?;
-                """, (value, now, child_id))
+            if key in COLUMN_MAP:
+                col = COLUMN_MAP[key]
+                cursor.execute(
+                    f"UPDATE child_profile SET {col} = ?, updated_at = ? WHERE child_id = ?;",
+                    (value, now, child_id)
+                )
             elif key == "hobby":
                 # Thêm vào danh sách hobbies nếu chưa có
                 cursor.execute("SELECT hobbies FROM child_profile WHERE child_id = ?;", (child_id,))
@@ -253,7 +260,7 @@ class MemoryManager:
                         curr_practice.append(w)
 
             new_score = score if score is not None else (min(100, len(curr_mastered) * 10))
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
 
             if row:
                 cursor.execute("""

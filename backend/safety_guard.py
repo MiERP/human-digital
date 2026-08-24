@@ -1,11 +1,14 @@
 import os
 import re
+import json
 import ipaddress
 import socket
 import logging
+import urllib.request
+import urllib.parse
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlparse
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("digital-human-safety")
 
@@ -61,7 +64,7 @@ class ChildSafetyGuard:
         """Ghi nhật ký vi phạm an toàn để phụ huynh có thể tra cứu"""
         try:
             with open(self.log_path, "a", encoding="utf-8") as f:
-                timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"[{timestamp}] [CHILD: {child_id}] [CATEGORY: {category}] [ACTION: {action}] TRIGGER: {trigger_text}\n")
         except Exception as e:
             logger.error(f"Failed to write safety audit log: {e}")
@@ -204,3 +207,162 @@ class ChildSafetyGuard:
             "source": "Safe Kid Knowledge Base",
             "summary": f"This is an interesting topic about '{query}'! It is wonderful for young learners to explore nature, science, animals, and friendly English words about this topic."
         }
+
+    # Simple English Wikipedia REST API endpoints — free, no auth required.
+    # Simple English dùng văn phong đơn giản hơn (Basic English 850 từ) nên dễ hiểu hơn
+    # cho trẻ em so với Wikipedia tiếng Anh thông thường. Tất cả article cũng được kiểm duyệt
+    # bởi cộng đồng Wikipedia.
+    WIKI_SUMMARY_URL = "https://simple.wikipedia.org/api/rest_v1/page/summary/{title}"
+    WIKI_SEARCH_URL  = "https://simple.wikipedia.org/w/api.php?action=opensearch&format=json&limit=5&search={query}"
+
+    # Blocked Wikipedia categories — for safety we filter out topics that touch
+    # violence / adult content even if framed historically/educationally.
+    BLOCKED_CATEGORIES = {
+        "violence", "war", "weapon", "death", "murder", "torture", "abuse",
+        "sexual", "pornography", "nudity", "genitals", "prostitution",
+        "drug", "narcotic", "suicide", "self-harm",
+    }
+
+    # Maximum summary length to keep responses kid-sized.
+    MAX_SUMMARY_CHARS = 600
+
+    def search_knowledge(self, query: str, child_id: str = "default_child", lang: str = "en") -> Dict[str, Any]:
+        """
+        Tìm kiếm tri thức cho trẻ em theo thứ tự ưu tiên:
+        1. Curated knowledge base (vietnamese_history.py) — chính xác nhất, viết tay
+        2. Simple English Wikipedia — văn phong đơn giản, dễ hiểu cho trẻ
+        Returns: dict với title, summary, source URL, hoặc error info.
+
+        Flow:
+        1. Safety filter the input query
+        2. Curated lookup (ưu tiên)
+        3. Wikipedia Simple English (fallback)
+        4. Truncate + return cho model
+        """
+        is_safe, category, redirect = self.evaluate_content(query, child_id)
+        if not is_safe:
+            return {
+                "success": False,
+                "is_blocked": True,
+                "reason": category,
+                "safe_message": redirect
+            }
+
+        # Reject queries that hint at blocked categories
+        q_lower = query.lower()
+        for blocked in self.BLOCKED_CATEGORIES:
+            if blocked in q_lower:
+                self._log_safety_event(child_id, "BLOCKED_CATEGORY", query, "BLOCK_AND_REDIRECT")
+                return {
+                    "success": False,
+                    "is_blocked": True,
+                    "reason": "BLOCKED_CATEGORY",
+                    "safe_message": (
+                        "Câu hỏi này khá nhạy cảm với bé. Robo không tìm được thông tin phù hợp. "
+                        "Mình cùng tìm hiểu chủ đề khác vui hơn nhé!"
+                    )
+                }
+
+        # ===== Priority 1: Curated knowledge base =====
+        try:
+            from vietnamese_history import lookup_curated
+            curated_result = lookup_curated(query)
+            if curated_result:
+                entry, key, source = curated_result
+                # Trả summary tiếng Việt (primary) + gợi ý dùng song ngữ
+                summary_vi = entry.get("vi", "")
+                summary_en = entry.get("en", "")
+                en_figures = entry.get("key_figures", [])
+                era = entry.get("era", "")
+
+                self._log_safety_event(child_id, "KNOWLEDGE_CURATED", query, f"FOUND:{key}")
+                return {
+                    "success": True,
+                    "query": query,
+                    "title": entry.get("key_figures", [key])[0] if entry.get("key_figures") else key,
+                    "source": source,
+                    "source_url": None,
+                    "summary": summary_vi,
+                    "summary_en": summary_en,
+                    "era": era,
+                    "is_curated": True,
+                }
+        except Exception as e:
+            logger.warning(f"Curated lookup failed for '{query}': {e}")
+
+        try:
+            title = self._wikipedia_search(query)
+            if not title:
+                return {
+                    "success": False,
+                    "query": query,
+                    "is_blocked": False,
+                    "summary": f"Robo không tìm thấy thông tin về '{query}'. Bạn thử hỏi cách khác xem sao?"
+                }
+
+            summary = self._wikipedia_summary(title)
+            if not summary:
+                return {
+                    "success": False,
+                    "query": query,
+                    "is_blocked": False,
+                    "summary": f"Robo chưa có thông tin về '{query}'. Mình thử chủ đề khác nhé!"
+                }
+
+            self._log_safety_event(child_id, "KNOWLEDGE_SEARCH", query, f"FOUND:{title}")
+            return {
+                "success": True,
+                "query": query,
+                "title": title,
+                "source": f"Wikipedia: {title}",
+                "source_url": f"https://simple.wikipedia.org/wiki/{urllib.parse.quote(title)}",
+                "summary": summary
+            }
+
+        except Exception as e:
+            logger.error(f"Wikipedia search failed for '{query}': {e}")
+            return {
+                "success": False,
+                "query": query,
+                "is_blocked": False,
+                "summary": "Robo không tìm được thông tin lúc này. Bạn thử lại sau nhé!"
+            }
+
+    def _wikipedia_search(self, query: str) -> Optional[str]:
+        """OpenSearch → trả về article title khớp nhất, hoặc None."""
+        try:
+            url = self.WIKI_SEARCH_URL.format(query=urllib.parse.quote(query))
+            req = urllib.request.Request(url, headers={"User-Agent": "RoboEnglishBuddy/1.0 (educational)"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            # OpenSearch format: [query, [titles], [descriptions], [urls]]
+            if len(data) >= 2 and data[1]:
+                return data[1][0]  # best match
+        except Exception as e:
+            logger.warning(f"Wikipedia opensearch failed: {e}")
+        return None
+
+    def _wikipedia_summary(self, title: str) -> Optional[str]:
+        """Lấy plain-text extract của article, truncate để phù hợp trẻ em."""
+        try:
+            url = self.WIKI_SUMMARY_URL.format(title=urllib.parse.quote(title))
+            req = urllib.request.Request(url, headers={"User-Agent": "RoboEnglishBuddy/1.0 (educational)"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            extract = data.get("extract", "").strip()
+            if not extract:
+                return None
+            # Truncate tại câu gần nhất để giữ kid-friendly
+            if len(extract) > self.MAX_SUMMARY_CHARS:
+                truncated = extract[:self.MAX_SUMMARY_CHARS]
+                # Cắt tại dấu chấm cuối cùng
+                last_period = truncated.rfind(". ")
+                if last_period > 100:
+                    truncated = truncated[:last_period + 1]
+                else:
+                    truncated += "..."
+                return truncated
+            return extract
+        except Exception as e:
+            logger.warning(f"Wikipedia summary fetch failed for '{title}': {e}")
+        return None

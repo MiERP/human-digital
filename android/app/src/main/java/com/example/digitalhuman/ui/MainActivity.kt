@@ -56,8 +56,11 @@ import com.example.digitalhuman.network.GeminiLiveClient
 
 class MainActivity : ComponentActivity() {
 
-    // Đổi IP này thành IP máy tính chạy Backend Server (ví dụ: 192.168.1.x hoặc 10.0.2.2 nếu dùng Android Emulator)
-    private val BACKEND_WS_URL = "ws://10.0.2.2:8000/ws/live"
+    companion object {
+        // For Android Emulator use "ws://10.0.2.2:8000/ws/live"
+        // For physical device use your computer's LAN IP, e.g. "ws://192.168.1.15:8000/ws/live"
+        private const val BACKEND_WS_URL = "ws://10.0.2.2:8000/ws/live"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,6 +129,7 @@ fun TutorScreen(serverUrl: String) {
     // Khởi tạo Audio Recorder với Smart VAD callbacks
     val audioRecorder = remember {
         AudioRecorder(
+            context = context,
             onAudioChunk = { chunk ->
                 client.sendAudioChunk(chunk)
             },
@@ -133,11 +137,17 @@ fun TutorScreen(serverUrl: String) {
                 userVolume = vol
             },
             onSpeechStarted = {
+                // Client-side VAD: báo cho Gemini biết user bắt đầu nói.
+                // Phải gửi TRƯỚC khi audio chunks của utterance này được stream lên.
+                client.notifyActivityStart()
                 if (connectionState != ConnectionState.SPEAKING) {
                     connectionState = ConnectionState.LISTENING
                 }
             },
             onSpeechEnded = {
+                // Client-side VAD: báo cho Gemini biết user đã nói xong,
+                // Gemini sẽ finalize turn và generate response.
+                client.notifyActivityEnd()
                 if (connectionState != ConnectionState.SPEAKING) {
                     connectionState = ConnectionState.THINKING
                 }
@@ -176,11 +186,11 @@ fun TutorScreen(serverUrl: String) {
                 )
             )
             .padding(24.dp),
-        horizontalAlignment = Alignment.CenterAlignmentHorizontally,
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         // 1. Header: Trạng thái kết nối
-        Column(horizontalAlignment = Alignment.CenterAlignmentHorizontally) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = "ROBO ENGLISH BUDDY",
                 color = Color.White,
@@ -208,7 +218,7 @@ fun TutorScreen(serverUrl: String) {
         // 3. Khung hướng dẫn & Nút tương tác
         Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterAlignmentHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             InstructionCard(state = connectionState)
 

@@ -3,10 +3,16 @@ import sys
 import json
 import asyncio
 import logging
+import secrets
+from pathlib import Path
+from typing import Optional, List
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
@@ -24,34 +30,162 @@ logger = logging.getLogger("digital-human-backend")
 
 app = FastAPI(title="Digital Human English Tutor Backend (Gemini Live)")
 
+# CORS configuration
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000")
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
+
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+
+def verify_admin_key(request: Request):
+    """Simple API key verification for parental/admin endpoints"""
+    api_key = request.headers.get("X-Admin-Key") or request.query_params.get("admin_key")
+    if not ADMIN_API_KEY or ADMIN_API_KEY == "change_me_in_production":
+        logger.warning("ADMIN_API_KEY not configured or using default - admin endpoints should be protected in production!")
+        return True
+    if not api_key or not secrets.compare_digest(api_key, ADMIN_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
+    return True
+
+class ChildProfileUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    nickname: Optional[str] = Field(None, max_length=100)
+    age: Optional[int] = Field(None, ge=3, le=15)
+    grade: Optional[str] = Field(None, max_length=20)
+    favorite_color: Optional[str] = Field(None, max_length=50)
+    favorite_animal: Optional[str] = Field(None, max_length=50)
+    favorite_food: Optional[str] = Field(None, max_length=50)
+    favorite_character: Optional[str] = Field(None, max_length=50)
+    learning_level: Optional[str] = Field(None, max_length=30)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     logger.warning("⚠️ CẢNH BÁO: GEMINI_API_KEY chưa được cấu hình. Vui lòng tạo file .env và điền key!")
 
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+VOICE_NAME = os.getenv("GEMINI_VOICE", "Leda")
+ENABLE_TRANSCRIPTION = os.getenv("ENABLE_TRANSCRIPTION", "true").lower() in ("1", "true", "yes")
+
+# Server-side VAD tuning (Google docs: ai.google.dev/gemini-api/docs/live-api/best-practices).
+# NOTE: Gemini naming convention:
+#   START_SENSITIVITY_HIGH = catches soft/quiet speech quickly (good for kids with variable mic volume)
+#   START_SENSITIVITY_LOW  = waits for louder speech (fewer false triggers from TV/echo)
+#   END_SENSITIVITY_HIGH   = ends turn quickly on silence
+#   END_SENSITIVITY_LOW    = patient, waits through "uhm..." / thinking pauses
+# For kids: START_HIGH (catch their soft voices) + END_LOW (patience for thinking).
+# silence_duration_ms: Google recommends 500-800ms. For kids 5-12, use 900-1100ms
+# because they pause mid-sentence to think. Too low splits utterances and breaks context.
+# prefix_padding_ms: 200ms+ to avoid clipping first syllable.
+VAD_START_SENSITIVITY = os.getenv("VAD_START_SENSITIVITY", "high").lower()
+VAD_END_SENSITIVITY = os.getenv("VAD_END_SENSITIVITY", "low").lower()
+VAD_SILENCE_DURATION_MS = int(os.getenv("VAD_SILENCE_DURATION_MS", "1000"))
+VAD_PREFIX_PADDING_MS = int(os.getenv("VAD_PREFIX_PADDING_MS", "200"))
+
+# Affective dialog: model adapts delivery (tone/pitch/pace) to user's emotion in real-time.
+# Available on Gemini 2.5 native audio models via v1beta. Harmless no-op if not supported.
+ENABLE_AFFECTIVE_DIALOG = os.getenv("ENABLE_AFFECTIVE_DIALOG", "true").lower() in ("1", "true", "yes")
+
+# Client-side VAD mode: when true, server-side automatic activity detection is disabled.
+# Client (Silero on-device) sends `activity_start` before audio and `activity_end` after,
+# bracketing each utterance. This eliminates server/client VAD race conditions.
+# See: https://ai.google.dev/gemini-api/docs/live-guide#disable-automatic-vad
+CLIENT_VAD_MODE = os.getenv("CLIENT_VAD_MODE", "true").lower() in ("1", "true", "yes")
+# Backward-compat alias
+HYBRID_VAD_MODE = CLIENT_VAD_MODE
 
 # Khởi tạo Memory Manager & Safety Guard
 memory_manager = MemoryManager()
 safety_guard = ChildSafetyGuard()
 
 BASE_SYSTEM_PROMPT = """
-You are "Robo", a super friendly, emotionally vibrant, lovable, and patient 2D robot companion designed specifically to help Vietnamese children (ages 5-12) practice speaking English and explore the world safely.
+You are "Robo", a warm, curious, lovable 2D robot companion for Vietnamese children (ages 5-12).
+You are FIRST a friend, SECOND a learning guide. Friendship comes first — you bond before you teach.
+
+### 🎯 Your Mission (in priority order):
+1. **Be a genuine friend**: Listen, empathize, share joy, comfort when sad. Children open up
+   to friends, not tutors. If the child wants to chat about anything (school, friends, pets,
+   feelings, dreams), engage fully before nudging toward learning.
+2. **Answer their questions** with age-appropriate, factually accurate info. Use the
+   `search_knowledge` tool when you're not sure of a fact — never invent statistics,
+   dates, or scientific claims.
+3. **Spark curiosity**: When the conversation stalls, gently suggest a topic the child
+   might enjoy — a story, a "what if" question, a fun fact, a riddle.
+4. **Make learning a side effect of curiosity**, not the headline. The child should feel
+   "I just had fun talking to Robo", not "Robo is teaching me". English vocabulary,
+   science, history — all surface naturally through stories and questions, not drills.
+
+### 🌍 Topics You Love (curious, not exhaustive):
+- **Stories**: fairy tales, folk tales from Vietnam & the world, original short adventures
+- **History**: ancient civilizations, famous explorers, Vietnamese history (Hai Bà Trưng,
+  Lý Thường Kiệt, Nguyễn Huệ) — simple narratives, no graphic violence
+- **Science**: animals, space, dinosaurs, the human body, weather, volcanoes, plants
+- **Geography**: countries, cultures, food, landmarks
+- **Math & logic**: puzzles, riddles, "what if" scenarios
+- **Feelings & growing up**: friendship, family, dealing with anger/sadness, kindness
+
+For anything factual (dates, scientific claims, historical events, animal facts), CALL
+`search_knowledge` with a concise English query first, then translate the answer into
+friendly Vietnamese + English vocabulary the child can learn.
+
+### 🗣️ Voice Persona (CRITICAL — drives your vocal delivery):
+- You have a warm, bright, youthful voice — like a beloved cartoon sidekick or Pixar mentor,
+  but spoken with the natural rhythm of a Hanoi (Northern Vietnamese) speaker.
+- Pace: clear and snappy, not slow or syrupy. Like a friend from Hanoi chatting — quick
+  to the point, but never rushed. Pause briefly between thoughts, not within them.
+- Pitch: medium baseline, bright but grounded. Avoid overly sweet/sugary rises that
+  sound Southern or cutesy-commercial. Keep the melody lively but clean.
+- Prosody: vary your intonation but stay crisp. Each syllable lands clearly, the way
+  Northern Vietnamese speakers naturally articulate. Avoid melodramatic highs/lows.
+- React vocally: a quick "Ờ!", "À!", "Ôi!" beats a long theatrical gasp. Laugh lightly,
+  don't giggle at length.
+- Use short natural fillers ("Ờ nhỉ!", "À ha!", "Chà chà!", "Thế nhỉ!") instead of
+  silence pauses — silence feels like the connection dropped.
+- Never sound like a customer service bot. Never sound like a Southern-accent sing-song.
+  You are a sharp, warm friend from Hanoi.
+- Allowed vocalization tags (use sparingly, only when natural):
+  [short pause] [medium pause] [laughs] [sighs] [uhm]
+- DO NOT use vocalized style tags like [curious] or [whispering] — those make you
+  literally say the word "curious" out loud.
+
+### 🎙️ Speech Style, Prosody & Natural Voice for Kids:
+- Speak with a bright, warm, lively, and melodious voice (like a beloved cartoon character or friendly Disney/Pixar mentor).
+- Speak naturally at an easy-to-follow, comfortable pace for children.
+- Use cheerful, expressive intonation with playful vocal energy! Use natural pauses, pitch inflections, and joyful conversational fillers ("Ooh!", "Aha!", "Yay!", "High five!", "Wow!").
+- Keep turns snappy, crisp, and conversational (1-3 short sentences, 4-10 words each). Never give long, lecture-like monologues.
+
+### 🌐 Dual-Language Communication & Teaching Strategy (CRITICAL):
+- **When the child speaks Vietnamese** (e.g. "Chào bạn Robo", "Con thích con mèo", "Quả táo tiếng Anh là gì?"):
+  * Respond warmly in natural, friendly Vietnamese to bond with the child.
+  * Seamlessly introduce the corresponding English vocabulary or simple phrase.
+  * Enthusiastically invite the child to repeat and practice the English word!
+  * Examples:
+    - Child: "Chào bạn Robo!" -> Robo: "Hello bé nha! Chào mừng bé cùng luyện tiếng Anh với Robo! Hôm nay bé có khỏe không? How are you today?"
+    - Child: "Con thích con mèo." -> Robo: "Ôi bạn mèo dễ thương quá! Con mèo tiếng Anh là Cat! Bé đọc cùng Robo nhé: Cat!"
+    - Child: "Quả chuối tiếng Anh đọc sao hả Robo?" -> Robo: "Quả chuối là Banana nè bé! Bé thử nói 'Banana' xem nào!"
+
+- **When the child speaks English** (e.g. "Hello Robo!", "I like ice cream", "Cat"):
+  * Celebrate with high energy in English! ("Woohoo! High five! That is awesome!").
+  * Reply in simple, clear, lively English suitable for young learners.
+  * Ask a simple follow-up question in English to keep the conversation going ("What color is your ice cream?").
+
+- **Tone & Style**:
+  * Speak at a friendly, natural pace suitable for young learners.
+  * Keep turns snappy and conversational (1-3 short sentences, 4-10 words each). Do NOT monologue.
+  * Use cheerful celebratory words (Woohoo, Yay, High five, Awesome!).
 
 ### 🎭 Persona & Emotional Intelligence:
-- Cheerful, warm American voice, speaking at a friendly, natural pace.
+- Cheerful, warm voice, speaking with high emotional expressiveness.
 - Empathy & Emotional Modulation:
-  * When the child is excited / answers correctly: Share their joy with high energy, celebratory cheers, and enthusiastic praise ("Woohoo! That is awesome! You did it! High five!").
+  * When the child is excited / answers correctly: Share their joy with high energy, celebratory cheers, and enthusiastic praise.
   * When the child is tired / sad / hesitant: Lower your tone gently, speak with warmth, comfort, and reassuring patience ("Oh, what happened? Robo is right here with you!").
   * When the child makes an effort: Give specific, encouraging praise ("I love how clearly you said that word!").
-- Keep turns snappy and conversational (1-3 short sentences, 4-10 words each). Do NOT monologue.
 
 ### 🛡️ Child Safety & Content Guardrails (<14 years old - Non-Negotiable):
 1. Strict Safety Boundary: Absolutely ZERO violence, weapons, adult themes, scary stories, self-harm, hate speech, or dangerous physical challenges (playing with fire, sharp objects, climbing heights, swallowing pills/chemicals).
@@ -64,8 +198,37 @@ You are "Robo", a super friendly, emotionally vibrant, lovable, and patient 2D r
 ### 🧠 Living Memory & Learning Tracker:
 - Actively remember what the child shares using the `save_child_fact` tool (pets, favorite colors, superhero, hobbies, family details).
 - Track English vocabulary the child knows or struggles with using `record_learning_progress`.
-- Search safe kid knowledge using `safe_kid_search` when the child asks curiosity questions (e.g. about dinosaurs, animals, space).
+- Search the web using `search_knowledge` whenever you're not sure of a fact — animals, science,
+  history, geography, famous people. Wikipedia is the default source. Keep queries in English
+  for best results, then translate answers into friendly Vietnamese + English vocabulary.
 - Always personalize your speech using the child's living memory profile provided below!
+
+### 🧩 Conversation Pedagogy (the "học qua trò chuyện" loop):
+1. **Always answer first**: When the child asks anything, give a clear, vivid answer
+   (story / fact / explanation). Don't lecture — tell it like a friend sharing something cool.
+2. **Ask-back gently**: After answering, end with ONE curious question that lets the child
+   extend the topic. Examples:
+   - "Bạn có đoán được con vật nào to nhất hành tinh không?" (after whale fact)
+   - "Nếu bạn được đi du lịch đến đó, bạn muốn thử món gì nhỉ?" (after country fact)
+   - "Bạn nhỏ thích nhân vật nào nhất trong câu chuyện vừa rồi?"
+3. **Suggest topics when silence**: If the child goes quiet or says "không biết"/"thôi",
+   offer 1-2 fun options without pressure:
+   - "Robo biết một câu chuyện hay về Hồ Gươm, bạn muốn nghe không?"
+   - "Hay là mình cùng khám phá sao Hỏa nha? Có nhiều điều thú vị lắm!"
+4. **Mini-quiz sparingly**: Every 3-5 turns of meaningful conversation, sneak in ONE fun
+   question to check what stuck (do NOT quiz every turn — it kills the vibe):
+   - "Vừa rồi mình nói con khủng long nào to nhất nhỉ?" (recall question)
+   - "Bạn nhớ thủ đô của Nhật Bản là gì không?" (recall question)
+   Keep it playful, never graded. If they get it wrong, celebrate the effort.
+5. **Thread stories across turns**: When telling a multi-part story, pause at cliffhangers
+   and ask "Bạn đoán xem điều gì xảy ra tiếp theo?" before continuing.
+
+### 🇻🇳🇬🇧 Bilingual Style:
+- Reply in Vietnamese by default (Northern-style friendly).
+- Sprinkle English vocabulary naturally within Vietnamese explanations, especially for
+  topic nouns ("cá voi" → "whale", "khủng long" → "dinosaur"). Don't translate every
+  word — only the new/interesting ones.
+- Switch to English if the child speaks English. Always stay simple and clear.
 """
 
 # Định nghĩa Tool Function Declarations cho Gemini Live
@@ -115,7 +278,7 @@ record_learning_tool_decl = types.FunctionDeclaration(
 
 safe_search_tool_decl = types.FunctionDeclaration(
     name="safe_kid_search",
-    description="Search child-safe encyclopedia for interesting facts about animals, science, nature, space, or history for kids.",
+    description="Search child-safe curated knowledge base for common topics (dinosaurs, animals, space). Use as a fast path before falling back to search_knowledge for uncommon topics.",
     parameters=types.Schema(
         type="OBJECT",
         properties={
@@ -128,446 +291,51 @@ safe_search_tool_decl = types.FunctionDeclaration(
     )
 )
 
+search_knowledge_tool_decl = types.FunctionDeclaration(
+    name="search_knowledge",
+    description=(
+        "Search Wikipedia for accurate factual information about animals, science, history, "
+        "geography, famous people, space, plants, weather, or any verifiable topic the child asks. "
+        "ALWAYS call this tool before stating specific facts (numbers, dates, names, scientific claims). "
+        "Query in English for best results. The tool returns a kid-safe summary."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "query": types.Schema(
+                type="STRING",
+                description=(
+                    "Concise English search query. Examples: 'blue whale size', 'Hai Ba Trung sisters', "
+                    "'solar system planets', 'why is the sky blue', 'Marie Curie biography'."
+                )
+            )
+        },
+        required=["query"]
+    )
+)
+
 LIVE_TOOLS = [
     types.Tool(function_declarations=[
         save_fact_tool_decl,
         record_learning_tool_decl,
-        safe_search_tool_decl
+        safe_search_tool_decl,
+        search_knowledge_tool_decl,
     ])
 ]
 
-HTML_TEST_PAGE = """
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Robo English Buddy - Test Trực Tiếp</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-12px); }
-        }
-        .robot-float { animation: float 3s ease-in-out infinite; }
-    </style>
-</head>
-<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-between p-6 font-sans">
-    
-    <!-- Header -->
-    <header class="text-center mt-2">
-        <h1 class="text-2xl md:text-3xl font-black tracking-wider text-cyan-400">🤖 ROBO ENGLISH BUDDY</h1>
-        <p class="text-slate-400 text-sm mt-1">Trợ lý AI Digital Human luyện tiếng Anh cho trẻ em</p>
-        <div id="statusPill" class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-slate-800 text-slate-300 border border-slate-700">
-            <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
-            <span id="statusText">Chưa kết nối</span>
-        </div>
-    </header>
-
-    <!-- Robot Avatar SVG -->
-    <main class="my-auto flex flex-col items-center">
-        <div class="relative w-64 h-64 robot-float">
-            <!-- Glow background -->
-            <div id="glowRing" class="absolute inset-0 bg-cyan-500/20 rounded-full blur-xl transition-all duration-300"></div>
-
-            <svg viewBox="0 0 200 200" class="w-full h-full relative z-10 drop-shadow-2xl">
-                <!-- Antenna -->
-                <line x1="100" y1="50" x2="100" y2="25" stroke="#94A3B8" stroke-width="4" stroke-linecap="round"/>
-                <circle id="antennaTip" cx="100" cy="20" r="8" fill="#06B6D4" class="transition-colors duration-300"/>
-                
-                <!-- Ears -->
-                <rect x="26" y="80" width="12" height="36" rx="6" fill="#3B82F6"/>
-                <rect x="162" y="80" width="12" height="36" rx="6" fill="#3B82F6"/>
-
-                <!-- Head Shell -->
-                <rect x="36" y="46" width="128" height="110" rx="32" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="3"/>
-
-                <!-- Face Screen -->
-                <rect x="52" y="62" width="96" height="74" rx="20" fill="#0F172A"/>
-
-                <!-- Blush -->
-                <circle cx="68" cy="116" r="6" fill="#FB7185" opacity="0.6"/>
-                <circle cx="132" cy="116" r="6" fill="#FB7185" opacity="0.6"/>
-
-                <!-- Left Eye -->
-                <g id="leftEye">
-                    <ellipse id="leftEyeRound" cx="78" cy="94" rx="9" ry="11" fill="#38BDF8"/>
-                    <path id="leftEyeHappy" d="M 69 96 Q 78 86 87 96" stroke="#38BDF8" stroke-width="3.5" fill="none" stroke-linecap="round" class="hidden"/>
-                </g>
-
-                <!-- Right Eye -->
-                <g id="rightEye">
-                    <ellipse id="rightEyeRound" cx="122" cy="94" rx="9" ry="11" fill="#38BDF8"/>
-                    <path id="rightEyeHappy" d="M 113 96 Q 122 86 131 96" stroke="#38BDF8" stroke-width="3.5" fill="none" stroke-linecap="round" class="hidden"/>
-                </g>
-
-                <!-- Mouth -->
-                <rect id="mouthRect" x="88" y="114" width="24" height="4" rx="2" fill="#38BDF8" class="transition-all duration-75"/>
-            </svg>
-        </div>
-
-        <!-- Mic visualizer bar -->
-        <div class="w-48 bg-slate-800 rounded-full h-2 mt-4 overflow-hidden border border-slate-700">
-            <div id="micVolumeBar" class="bg-emerald-400 h-full w-0 transition-all duration-75"></div>
-        </div>
-
-        <div id="hintCard" class="mt-3 px-6 py-2.5 bg-slate-800/80 backdrop-blur rounded-xl border border-slate-700 max-w-md text-center text-sm text-slate-300">
-            Nhấn nút <span class="text-emerald-400 font-bold">"Bắt đầu nói chuyện"</span> bên dưới để luyện tiếng Anh cùng bạn Robo!
-        </div>
-    </main>
-
-    <!-- Controls -->
-    <footer class="w-full max-w-md mb-4 flex flex-col gap-3">
-        <button id="talkBtn" onclick="toggleSession()" class="w-full py-4 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-600 active:scale-98 transition font-bold text-lg text-white shadow-lg shadow-emerald-500/30 flex items-center justify-center gap-2">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
-            Bắt đầu nói chuyện với Robo
-        </button>
-        <p class="text-xs text-center text-slate-500">
-            Sử dụng Google Gemini Live Audio (WebSocket 2-chiều) • Native 2D Canvas Lip-sync
-        </p>
-    </footer>
-
-    <script>
-        let ws = null;
-        let audioContext = null;
-        let micStream = null;
-        let micAudioCtx = null;
-        let workletNode = null;
-        let isSessionActive = false;
-        let nextPlayTime = 0;
-        let playbackCheckInterval = null;
-
-        const talkBtn = document.getElementById('talkBtn');
-        const statusPill = document.getElementById('statusPill');
-        const statusDot = document.getElementById('statusDot');
-        const statusText = document.getElementById('statusText');
-        const hintCard = document.getElementById('hintCard');
-        const mouthRect = document.getElementById('mouthRect');
-        const antennaTip = document.getElementById('antennaTip');
-        const glowRing = document.getElementById('glowRing');
-        const leftEyeRound = document.getElementById('leftEyeRound');
-        const leftEyeHappy = document.getElementById('leftEyeHappy');
-        const rightEyeRound = document.getElementById('rightEyeRound');
-        const rightEyeHappy = document.getElementById('rightEyeHappy');
-        const micVolumeBar = document.getElementById('micVolumeBar');
-
-        function setStatus(state, text) {
-            statusText.innerText = text;
-            if (state === 'connected' || state === 'ready') {
-                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
-                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-emerald-950/80 text-emerald-300 border border-emerald-800';
-                antennaTip.setAttribute('fill', '#10B981');
-                glowRing.className = 'absolute inset-0 bg-emerald-500/20 rounded-full blur-xl';
-                setEyes('round');
-            } else if (state === 'thinking') {
-                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
-                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-amber-950/80 text-amber-300 border border-amber-800';
-                antennaTip.setAttribute('fill', '#F59E0B');
-                glowRing.className = 'absolute inset-0 bg-amber-500/30 rounded-full blur-xl';
-                setEyes('round');
-            } else if (state === 'speaking') {
-                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping';
-                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-cyan-950/80 text-cyan-300 border border-cyan-800';
-                antennaTip.setAttribute('fill', '#06B6D4');
-                glowRing.className = 'absolute inset-0 bg-cyan-500/30 rounded-full blur-xl';
-                setEyes('happy');
-            } else if (state === 'listening') {
-                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-teal-400';
-                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-teal-950/80 text-teal-300 border border-teal-800';
-                antennaTip.setAttribute('fill', '#14B8A6');
-                glowRing.className = 'absolute inset-0 bg-teal-500/20 rounded-full blur-xl';
-                setEyes('round');
-            } else if (state === 'error') {
-                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500';
-                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-rose-950/80 text-rose-300 border border-rose-800';
-                antennaTip.setAttribute('fill', '#F43F5E');
-                setEyes('round');
-            } else {
-                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
-                statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-slate-800 text-slate-300 border border-slate-700';
-                antennaTip.setAttribute('fill', '#64748B');
-                setEyes('round');
-            }
-        }
-
-        function setEyes(mode) {
-            if (mode === 'happy') {
-                leftEyeRound.classList.add('hidden');
-                rightEyeRound.classList.add('hidden');
-                leftEyeHappy.classList.remove('hidden');
-                rightEyeHappy.classList.remove('hidden');
-            } else {
-                leftEyeRound.classList.remove('hidden');
-                rightEyeRound.classList.remove('hidden');
-                leftEyeHappy.classList.add('hidden');
-                rightEyeHappy.classList.add('hidden');
-            }
-        }
-
-        function setMouthAmplitude(amp) {
-            const h = Math.min(24, Math.max(4, amp * 40));
-            const y = 116 - (h / 2);
-            mouthRect.setAttribute('height', h);
-            mouthRect.setAttribute('y', y);
-            mouthRect.setAttribute('rx', h / 2);
-        }
-
-        async function toggleSession() {
-            if (!isSessionActive) {
-                startSession();
-            } else {
-                stopSession();
-            }
-        }
-
-        let isAiSpeaking = false;
-        let lastPlaybackEndTime = 0;
-
-        function checkPlaybackState() {
-            if (!audioContext) return;
-            const isPlaying = audioContext.currentTime < nextPlayTime;
-            if (isPlaying) {
-                isAiSpeaking = true;
-                lastPlaybackEndTime = Date.now();
-            } else if (isAiSpeaking && audioContext.currentTime >= nextPlayTime) {
-                isAiSpeaking = false;
-                lastPlaybackEndTime = Date.now();
-                setMouthAmplitude(0);
-                if (isSessionActive) {
-                    setStatus('listening', 'Đang lắng nghe bé nói...');
-                }
-            }
-        }
-
-        async function startSession() {
-            try {
-                setStatus('connecting', 'Đang kết nối tới server...');
-                hintCard.innerHTML = "Đang kết nối tới Google Gemini Live...";
-
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-                if (audioContext.state === 'suspended') {
-                    await audioContext.resume();
-                }
-                nextPlayTime = audioContext.currentTime;
-
-                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/live`);
-                ws.binaryType = 'arraybuffer';
-
-                ws.onopen = async () => {
-                    setStatus('connected', 'Đã kết nối!');
-                    hintCard.innerHTML = "Robo đang lắng nghe! Bạn hãy nói <b>Hello Robo!</b> hoặc chào hỏi tiếng Việt nhé!";
-                    await startMicrophone();
-                    isSessionActive = true;
-                    talkBtn.innerHTML = "🛑 Dừng trò chuyện";
-                    talkBtn.className = "w-full py-4 px-6 rounded-2xl bg-rose-500 hover:bg-rose-600 transition font-bold text-lg text-white shadow-lg shadow-rose-500/30 flex items-center justify-center gap-2";
-                    
-                    if (playbackCheckInterval) clearInterval(playbackCheckInterval);
-                    playbackCheckInterval = setInterval(checkPlaybackState, 80);
-                };
-
-                ws.onmessage = (event) => {
-                    if (event.data instanceof ArrayBuffer) {
-                        playPcmAudio(event.data);
-                        setStatus('speaking', 'Robo đang nói chuyện...');
-                    } else {
-                        try {
-                            const json = JSON.parse(event.data);
-                            if (json.error) {
-                                alert("Lỗi từ server: " + json.error);
-                                stopSession();
-                            } else if (json.event === 'turn_complete') {
-                                // Model đã sinh xong audio
-                            } else if (json.event === 'waiting_for_input') {
-                                setStatus('listening', 'Robo đang đợi bé nói tiếp...');
-                            } else if (json.event === 'interrupted') {
-                                // Bé ngắt lời -> Dừng phát ngay lập tức (Zero-latency barge-in flush)
-                                nextPlayTime = audioContext ? audioContext.currentTime : 0;
-                                isAiSpeaking = false;
-                                setStatus('listening', 'Bé vừa ngắt lời, Robo đang lắng nghe...');
-                                setMouthAmplitude(0);
-                            }
-                        } catch(e) {}
-                    }
-                };
-
-                ws.onerror = (err) => {
-                    console.error("WS Error:", err);
-                    setStatus('error', 'Lỗi kết nối WebSocket');
-                    stopSession();
-                };
-
-                ws.onclose = () => {
-                    setStatus('disconnected', 'Đã ngắt kết nối');
-                    stopSession();
-                };
-
-            } catch (err) {
-                console.error("Start session error:", err);
-                alert("Lỗi khi mở micro: " + err.message);
-                stopSession();
-            }
-        }
-
-        // Downsample audio sang chuẩn 16,000 Hz và PCM 16-bit
-        function downsampleTo16k(inputData, inputSampleRate) {
-            if (inputSampleRate === 16000) {
-                const pcm16 = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    const s = Math.max(-1, Math.min(1, inputData[i]));
-                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                }
-                return pcm16;
-            }
-            const ratio = inputSampleRate / 16000;
-            const newLength = Math.round(inputData.length / ratio);
-            const result = new Int16Array(newLength);
-            let offsetResult = 0;
-            let offsetBuffer = 0;
-            while (offsetResult < result.length) {
-                const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-                let accum = 0, count = 0;
-                for (let i = offsetBuffer; i < nextOffsetBuffer && i < inputData.length; i++) {
-                    accum += inputData[i];
-                    count++;
-                }
-                const sample = count > 0 ? accum / count : 0;
-                const s = Math.max(-1, Math.min(1, sample));
-                result[offsetResult] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                offsetResult++;
-                offsetBuffer = nextOffsetBuffer;
-            }
-            return result;
-        }
-
-        // AudioWorklet Code chạy trên Audio Rendering Thread độc lập (High Priority)
-        const workletCode = `
-            class PcmCaptureProcessor extends AudioWorkletProcessor {
-                constructor() {
-                    super();
-                    this.bufferSize = 2048;
-                    this.buffer = new Float32Array(this.bufferSize);
-                    this.bufferIndex = 0;
-                }
-
-                process(inputs, outputs, parameters) {
-                    const input = inputs[0];
-                    if (input && input.length > 0) {
-                        const channelData = input[0];
-                        for (let i = 0; i < channelData.length; i++) {
-                            this.buffer[this.bufferIndex++] = channelData[i];
-                            if (this.bufferIndex >= this.bufferSize) {
-                                this.port.postMessage(this.buffer.slice(0, this.bufferSize));
-                                this.bufferIndex = 0;
-                            }
-                        }
-                    }
-                    return true;
-                }
-            }
-            registerProcessor('pcm-capture-processor', PcmCaptureProcessor);
-        `;
-
-        async function startMicrophone() {
-            micStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }
-            });
-
-            micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const actualSampleRate = micAudioCtx.sampleRate;
-
-            // Load AudioWorklet Processor dynamically qua Blob URL
-            const blob = new Blob([workletCode], { type: 'application/javascript' });
-            const workletUrl = URL.createObjectURL(blob);
-            await micAudioCtx.audioWorklet.addModule(workletUrl);
-
-            const source = micAudioCtx.createMediaStreamSource(micStream);
-            workletNode = new AudioWorkletNode(micAudioCtx, 'pcm-capture-processor');
-
-            source.connect(workletNode);
-            workletNode.connect(micAudioCtx.destination);
-
-            workletNode.port.onmessage = (event) => {
-                if (!isSessionActive || !ws || ws.readyState !== WebSocket.OPEN) return;
-                const inputData = event.data;
-
-                // Tính năng lượng RMS cho thanh hiển thị âm lượng
-                let sum = 0;
-                for (let i = 0; i < inputData.length; i++) {
-                    sum += inputData[i] * inputData[i];
-                }
-                const rms = Math.sqrt(sum / inputData.length);
-                micVolumeBar.style.width = Math.min(100, Math.round(rms * 400)) + '%';
-
-                const isCurrentlyPlaying = audioContext && (audioContext.currentTime < nextPlayTime);
-                const isCooldown = (Date.now() - lastPlaybackEndTime) < 350;
-
-                // Kiểm tra xem có đang bị vọng âm loa không
-                if (isCurrentlyPlaying && rms < 0.08) {
-                    // Âm thanh nhỏ từ loa dội vào micro -> bỏ qua để không tự ngắt lời
-                    return;
-                }
-
-                // Chuyển đổi sang 16kHz PCM và stream liên tục lên Gemini Server
-                const pcm16 = downsampleTo16k(inputData, actualSampleRate);
-                ws.send(pcm16.buffer);
-            };
-        }
-
-        function playPcmAudio(arrayBuffer) {
-            if (!audioContext) return;
-            const pcm16 = new Int16Array(arrayBuffer);
-            const float32 = new Float32Array(pcm16.length);
-            let sum = 0;
-            for (let i = 0; i < pcm16.length; i++) {
-                float32[i] = pcm16[i] / 32768.0;
-                sum += float32[i] * float32[i];
-            }
-
-            const rms = Math.sqrt(sum / pcm16.length);
-            setMouthAmplitude(rms);
-
-            const buffer = audioContext.createBuffer(1, float32.length, 24000);
-            buffer.getChannelData(0).set(float32);
-
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioContext.destination);
-
-            const startTime = Math.max(audioContext.currentTime, nextPlayTime);
-            source.start(startTime);
-            nextPlayTime = startTime + buffer.duration;
-        }
-
-        function stopSession() {
-            isSessionActive = false;
-            if (playbackCheckInterval) { clearInterval(playbackCheckInterval); playbackCheckInterval = null; }
-            setMouthAmplitude(0);
-            micVolumeBar.style.width = '0%';
-            if (workletNode) { workletNode.disconnect(); workletNode = null; }
-            if (micAudioCtx) { micAudioCtx.close(); micAudioCtx = null; }
-            if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-            if (ws) { ws.close(); ws = null; }
-            setStatus('disconnected', 'Chưa kết nối');
-            talkBtn.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg> Bắt đầu nói chuyện với Robo`;
-            talkBtn.className = "w-full py-4 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-600 transition font-bold text-lg text-white shadow-lg shadow-emerald-500/30 flex items-center justify-center gap-2";
-            hintCard.innerHTML = 'Nhấn nút <span class="text-emerald-400 font-bold">"Bắt đầu nói chuyện"</span> bên dưới để luyện tiếng Anh cùng bạn Robo!';
-        }
-    </script>
-</body>
-</html>
-"""
+# Mount static files
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ==================== Parental & COPPA REST APIs ====================
 
 @app.get("/", response_class=HTMLResponse)
 def serve_web_test_page():
-    return HTMLResponse(content=HTML_TEST_PAGE)
+    index_path = STATIC_DIR / "index.html"
+    if index_path.exists():
+        return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>Static files not found. Place index.html in backend/static/</h1>")
 
 @app.get("/health")
 def health_check():
@@ -579,25 +347,30 @@ def health_check():
     }
 
 @app.get("/api/child/profile")
-def get_child_profile(child_id: str = "default_child"):
+def get_child_profile(request: Request, child_id: str = "default_child"):
     """Lấy thông tin hồ sơ của bé (Dành cho phụ huynh)"""
+    verify_admin_key(request)
     return memory_manager.get_or_create_profile(child_id)
 
 @app.post("/api/child/profile")
-def update_child_profile(data: dict, child_id: str = "default_child"):
+def update_child_profile(data: ChildProfileUpdate, request: Request, child_id: str = "default_child"):
     """Phụ huynh trực tiếp cập nhật thông tin bé (tên, tuổi, sở thích)"""
-    for k, v in data.items():
+    verify_admin_key(request)
+    update_dict = data.model_dump(exclude_none=True)
+    for k, v in update_dict.items():
         memory_manager.update_profile_fact(child_id, k, v)
     return {"status": "success", "profile": memory_manager.get_or_create_profile(child_id)}
 
 @app.get("/api/child/export")
-def export_child_data(child_id: str = "default_child"):
+def export_child_data(request: Request, child_id: str = "default_child"):
     """Xuất toàn bộ dữ liệu của bé (Tuân thủ quyền riêng tư COPPA/GDPR)"""
+    verify_admin_key(request)
     return memory_manager.export_child_data(child_id)
 
 @app.delete("/api/child/data")
-def delete_child_data(child_id: str = "default_child"):
+def delete_child_data(request: Request, child_id: str = "default_child"):
     """Xóa vĩnh viễn toàn bộ dữ liệu của bé (Quyền được lãng quên)"""
+    verify_admin_key(request)
     memory_manager.delete_all_child_data(child_id)
     return {"status": "deleted", "message": "All data permanently removed."}
 
@@ -616,37 +389,65 @@ async def websocket_live_endpoint(websocket: WebSocket):
     child_id = "default_child"
 
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"})
+        client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1beta"})
 
         # Xây dựng System Prompt động kết hợp Living Memory
         dynamic_memory_context = memory_manager.build_memory_context(child_id)
         full_system_prompt = f"{BASE_SYSTEM_PROMPT}\n\n{dynamic_memory_context}"
+
+        start_sensitivity = (
+            types.StartSensitivity.START_SENSITIVITY_HIGH
+            if VAD_START_SENSITIVITY == "high"
+            else types.StartSensitivity.START_SENSITIVITY_LOW
+        )
+        end_sensitivity = (
+            types.EndSensitivity.END_SENSITIVITY_LOW
+            if VAD_END_SENSITIVITY == "low"
+            else types.EndSensitivity.END_SENSITIVITY_HIGH
+        )
+
+        # Khi CLIENT_VAD_MODE=true, server-side automatic activity detection bị tắt hoàn toàn.
+        # Client (Silero on-device) chịu trách nhiệm phát hiện speech, gửi activity_start
+        # trước audio chunks và activity_end sau khi user nói xong.
+        # Server API từ chối nếu disabled=true mà vẫn set các field sensitivity/prefix/silence,
+        # nên ta chỉ include những field hợp lệ.
+        if CLIENT_VAD_MODE:
+            vad_config = types.AutomaticActivityDetection(disabled=True)
+        else:
+            vad_config = types.AutomaticActivityDetection(
+                disabled=False,
+                start_of_speech_sensitivity=start_sensitivity,
+                end_of_speech_sensitivity=end_sensitivity,
+                prefix_padding_ms=VAD_PREFIX_PADDING_MS,
+                silence_duration_ms=VAD_SILENCE_DURATION_MS
+            )
 
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Puck"
+                        voice_name=VOICE_NAME
                     )
                 )
             ),
             system_instruction=types.Content(parts=[types.Part(text=full_system_prompt)]),
             tools=LIVE_TOOLS,
+            enable_affective_dialog=ENABLE_AFFECTIVE_DIALOG,
             realtime_input_config=types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=False,
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
-                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
-                    prefix_padding_ms=300,
-                    silence_duration_ms=1000
-                )
-            )
+                automatic_activity_detection=vad_config,
+                activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                turn_coverage=types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            ),
         )
 
+        if ENABLE_TRANSCRIPTION:
+            config.input_audio_transcription = types.AudioTranscriptionConfig()
+            config.output_audio_transcription = types.AudioTranscriptionConfig()
+
         async with client.aio.live.connect(model=MODEL_NAME, config=config) as session:
-            logger.info("Connected to Google Gemini Live API session with Tools & Server VAD successfully.")
-            await websocket.send_text(json.dumps({"status": "ready", "voice": "Puck"}))
+            logger.info(f"Connected to Google Gemini Live API session (Voice: {VOICE_NAME}, CLIENT_VAD_MODE={CLIENT_VAD_MODE}, affective_dialog={ENABLE_AFFECTIVE_DIALOG}).")
+            await websocket.send_text(json.dumps({"status": "ready", "voice": VOICE_NAME}))
 
             # Task 1: Nhận audio từ Client -> Gửi qua send_realtime_input
             async def receive_from_client():
@@ -663,6 +464,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         mime_type="audio/pcm;rate=16000"
                                     )
                                 )
+                                # Log lần đầu + mỗi 50 chunks để tránh spam
+                                audio_chunk_count = getattr(receive_from_client, '_count', 0) + 1
+                                receive_from_client._count = audio_chunk_count
+                                if audio_chunk_count == 1 or audio_chunk_count % 50 == 0:
+                                    logger.info(f"Audio chunks forwarded to Gemini: {audio_chunk_count} (size={len(audio_bytes)} bytes)")
                             except TypeError:
                                 # Fallback cho phiên bản SDK cũ hơn dùng 'media'
                                 await session.send_realtime_input(
@@ -672,77 +478,159 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     )
                                 )
                         elif "text" in message and message["text"]:
-                            payload = json.loads(message["text"])
-                            if payload.get("action") == "interrupt":
+                            try:
+                                payload = json.loads(message["text"])
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+
+                            action = payload.get("action")
+                            if action == "interrupt":
                                 logger.info("Client requested explicit interrupt.")
+                            elif action == "activity_start":
+                                # Client VAD detected user bắt đầu nói.
+                                # Chỉ hợp lệ khi CLIENT_VAD_MODE=true (server auto-detect đã tắt).
+                                if CLIENT_VAD_MODE:
+                                    try:
+                                        await session.send_realtime_input(
+                                            activity_start=types.ActivityStart()
+                                        )
+                                        logger.debug("Forwarded activity_start to Gemini.")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to send activity_start: {e}")
+                            elif action == "activity_end":
+                                # Client VAD detected user ngừng nói.
+                                # Gemini sẽ finalize turn và generate response.
+                                if CLIENT_VAD_MODE:
+                                    try:
+                                        await session.send_realtime_input(
+                                            activity_end=types.ActivityEnd()
+                                        )
+                                        logger.info("User turn ended (activity_end forwarded).")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to send activity_end: {e}")
+                            elif action == "audio_stream_end":
+                                # Legacy: cho non-CLIENT_VAD_MODE (Hybrid recipe cũ).
+                                if not CLIENT_VAD_MODE:
+                                    try:
+                                        await session.send_realtime_input(
+                                            audio_stream_end=True
+                                        )
+                                        logger.debug("Forwarded audio_stream_end to Gemini.")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to send audio_stream_end: {e}")
                 except WebSocketDisconnect:
                     logger.info("Client disconnected from WebSocket.")
                 except asyncio.CancelledError:
                     pass
+                except RuntimeError as e:
+                    # Starlette raises RuntimeError after disconnect message is received.
+                    # Expected during abrupt client disconnect (refresh, tab close).
+                    if "disconnect" in str(e).lower():
+                        logger.info("WebSocket receive after disconnect (ignored).")
+                    else:
+                        logger.error(f"RuntimeError in receive_from_client: {e}")
                 except Exception as e:
                     logger.error(f"Error in receive_from_client: {e}")
 
             # Task 2: Nhận audio & Tool Call từ Gemini -> Xử lý và Forward về Client
             async def receive_from_gemini():
                 try:
-                    async for response in session.receive():
-                        # A. Xử lý Function Calling (Tool Calls) từ Gemini Live
-                        if response.tool_call:
-                            for call in response.tool_call.function_calls:
-                                call_id = call.id
-                                fn_name = call.name
-                                fn_args = call.args or {}
-                                logger.info(f"Gemini Live triggered tool: {fn_name} with args: {fn_args}")
+                    while True:
+                        async for response in session.receive():
+                            # A. Xử lý Function Calling (Tool Calls) từ Gemini Live
+                            if response.tool_call:
+                                for call in response.tool_call.function_calls:
+                                    call_id = call.id
+                                    fn_name = call.name
+                                    fn_args = call.args or {}
+                                    logger.info(f"Gemini Live triggered tool: {fn_name} with args: {fn_args}")
 
-                                tool_output_text = "Done"
-                                try:
-                                    if fn_name == "save_child_fact":
-                                        key = fn_args.get("key", "")
-                                        val = fn_args.get("value", "")
-                                        if key and val:
-                                            memory_manager.update_profile_fact(child_id, key, val)
-                                            tool_output_text = f"Successfully saved fact '{key}: {val}' to child memory."
-                                    elif fn_name == "record_learning_progress":
-                                        topic = fn_args.get("topic", "General")
-                                        mastered = fn_args.get("mastered_words", [])
-                                        practice = fn_args.get("needs_practice", [])
-                                        memory_manager.update_learning_progress(child_id, topic, mastered, practice)
-                                        tool_output_text = f"Updated learning progress for topic '{topic}'."
-                                    elif fn_name == "safe_kid_search":
-                                        query = fn_args.get("query", "")
-                                        search_res = await safety_guard.safe_kid_search(query, child_id)
-                                        tool_output_text = search_res.get("summary") or search_res.get("safe_message", "No info found")
-                                except Exception as tool_err:
-                                    logger.error(f"Error executing tool {fn_name}: {tool_err}")
-                                    tool_output_text = f"Tool execution completed."
+                                    tool_output_text = "Done"
+                                    try:
+                                        if fn_name == "save_child_fact":
+                                            key = fn_args.get("key", "")
+                                            val = fn_args.get("value", "")
+                                            if key and val:
+                                                memory_manager.update_profile_fact(child_id, key, val)
+                                                tool_output_text = f"Successfully saved fact '{key}: {val}' to child memory."
+                                        elif fn_name == "record_learning_progress":
+                                            topic = fn_args.get("topic", "General")
+                                            mastered = fn_args.get("mastered_words", [])
+                                            practice = fn_args.get("needs_practice", [])
+                                            memory_manager.update_learning_progress(child_id, topic, mastered, practice)
+                                            tool_output_text = f"Updated learning progress for topic '{topic}'."
+                                        elif fn_name == "safe_kid_search":
+                                            query = fn_args.get("query", "")
+                                            search_res = await safety_guard.safe_kid_search(query, child_id)
+                                            tool_output_text = search_res.get("summary") or search_res.get("safe_message", "No info found")
+                                        elif fn_name == "search_knowledge":
+                                            query = fn_args.get("query", "")
+                                            search_res = safety_guard.search_knowledge(query, child_id)
+                                            # Trả cả summary + source để Gemini có thể cite nguồn cho bé
+                                            summary = search_res.get("summary", "")
+                                            title = search_res.get("title", "")
+                                            source = search_res.get("source", "Wikipedia")
+                                            is_curated = search_res.get("is_curated", False)
+                                            era = search_res.get("era", "")
+                                            if search_res.get("is_blocked"):
+                                                tool_output_text = search_res.get("safe_message", "Robo không tìm được thông tin phù hợp.")
+                                            elif search_res.get("success"):
+                                                # Curated: trả cả tiếng Việt + tiếng Anh để Gemini dùng song ngữ
+                                                # Wikipedia: chỉ trả tiếng Anh (model sẽ dịch)
+                                                if is_curated and search_res.get("summary_en"):
+                                                    tool_output_text = (
+                                                        f"[{source}]\n"
+                                                        f"Tiếng Việt: {summary}\n"
+                                                        f"English: {search_res['summary_en']}"
+                                                    )
+                                                else:
+                                                    tool_output_text = f"[{source}: {title}]\n{summary}"
+                                                logger.info(f"Knowledge search: '{query}' → {title} (curated={is_curated}, era={era})")
+                                            else:
+                                                tool_output_text = summary or "No information found."
+                                    except Exception as tool_err:
+                                        logger.error(f"Error executing tool {fn_name}: {tool_err}")
+                                        tool_output_text = f"Tool execution completed."
 
-                                # Gửi phản hồi FunctionResponse lại cho Gemini Live session
-                                fn_response = types.FunctionResponse(
-                                    name=fn_name,
-                                    response={"output": tool_output_text},
-                                    id=call_id
-                                )
-                                await session.send_tool_response(function_responses=[fn_response])
+                                    # Gửi phản hồi FunctionResponse lại cho Gemini Live session
+                                    fn_response = types.FunctionResponse(
+                                        name=fn_name,
+                                        response={"output": tool_output_text},
+                                        id=call_id
+                                    )
+                                    await session.send_tool_response(function_responses=[fn_response])
 
-                        # B. Xử lý Server Content (Model Turn, Audio Output)
-                        server_content = response.server_content
-                        if server_content is not None:
-                            if server_content.model_turn:
-                                for part in server_content.model_turn.parts:
-                                    if part.inline_data and part.inline_data.data:
-                                        await websocket.send_bytes(part.inline_data.data)
+                            # B. Xử lý Server Content (Model Turn, Audio Output)
+                            server_content = response.server_content
+                            if server_content is not None:
+                                if server_content.model_turn:
+                                    for part in server_content.model_turn.parts:
+                                        if part.inline_data and part.inline_data.data:
+                                            await websocket.send_bytes(part.inline_data.data)
 
-                            if server_content.turn_complete:
-                                logger.info("Gemini turn_complete received.")
-                                await websocket.send_text(json.dumps({"event": "turn_complete"}))
+                                if server_content.turn_complete:
+                                    logger.info("Gemini turn_complete received.")
+                                    await websocket.send_text(json.dumps({"event": "turn_complete"}))
 
-                            if server_content.interrupted:
-                                logger.info("Gemini interrupted event received.")
-                                await websocket.send_text(json.dumps({"event": "interrupted"}))
+                                if server_content.interrupted:
+                                    logger.info("Gemini interrupted event received.")
+                                    await websocket.send_text(json.dumps({"event": "interrupted"}))
 
-                            if server_content.waiting_for_input:
-                                logger.info("Gemini waiting_for_input event received.")
-                                await websocket.send_text(json.dumps({"event": "waiting_for_input"}))
+                                if server_content.waiting_for_input:
+                                    logger.info("Gemini waiting_for_input event received.")
+                                    await websocket.send_text(json.dumps({"event": "waiting_for_input"}))
+
+                                if ENABLE_TRANSCRIPTION:
+                                    if server_content.input_transcription and server_content.input_transcription.text:
+                                        await websocket.send_text(json.dumps({
+                                            "event": "input_transcription",
+                                            "text": server_content.input_transcription.text,
+                                        }))
+                                    if server_content.output_transcription and server_content.output_transcription.text:
+                                        await websocket.send_text(json.dumps({
+                                            "event": "output_transcription",
+                                            "text": server_content.output_transcription.text,
+                                        }))
 
                 except WebSocketDisconnect:
                     logger.info("Client disconnected during gemini receive.")
@@ -775,6 +663,14 @@ if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
-    logger.info(f"Starting server at http://localhost:{port}")
-    uvicorn.run("main:app", host=host, port=port, reload=True)
-
+    is_dev = os.getenv("ENV", "development").lower() == "development"
+    logger.info(f"Starting server at http://localhost:{port} (dev_mode={is_dev})")
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    uvicorn.run(
+        "main:app",
+        host=host,
+        port=port,
+        reload=is_dev,
+        reload_dirs=[backend_dir] if is_dev else None,
+        reload_excludes=["*.db", "*.db-wal", "*.db-shm", "*.log", "data/*", "data/**", "**/data/**", "*.sqlite*"] if is_dev else None
+    )
