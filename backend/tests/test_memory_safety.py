@@ -109,5 +109,103 @@ class TestChildMemoryAndSafety(unittest.TestCase):
             cursor.execute("SELECT * FROM child_profile WHERE child_id = ?;", (child_id,))
             self.assertIsNone(cursor.fetchone())
 
+    def test_personalization_profile_update(self):
+        """Kiểm tra cập nhật hồ sơ cá nhân hóa từ phụ huynh"""
+        child_id = "kid_personalized"
+        self.memory.update_profile(child_id, {
+            "name": "Minh",
+            "age": 7,
+            "personality": "nhút nhát, cần động viên",
+            "hobbies": ["vẽ tranh", "bơi lội"],
+            "family_info": {"mom": "Hoa", "pet": "Miu"},
+        })
+        profile = self.memory.get_or_create_profile(child_id)
+        self.assertEqual(profile["name"], "Minh")
+        self.assertEqual(profile["age"], 7)
+        self.assertEqual(profile["personality"], "nhút nhát, cần động viên")
+        self.assertEqual(profile["hobbies"], ["vẽ tranh", "bơi lội"])
+        self.assertEqual(profile["family_info"]["mom"], "Hoa")
+        self.assertEqual(profile["family_info"]["pet"], "Miu")
+
+        # build_memory_context phải đưa tính cách + sở thích vào prompt
+        context = self.memory.build_memory_context(child_id)
+        self.assertIn("nhút nhát", context)
+        self.assertIn("vẽ tranh", context)
+        self.assertIn("Hoa", context)
+
+    def test_first_run_setup_flow(self):
+        """Kiểm tra luồng cấu hình lần đầu: setup chưa xong -> ghi hồ sơ -> đánh dấu xong"""
+        child_id = "kid_first_run"
+        self.assertFalse(self.memory.is_profile_completed(child_id))
+
+        self.memory.update_profile(child_id, {
+            "name": "Su",
+            "age": 7,
+            "gender": "female",
+            "personality": "hoạt bát, thích được khen",
+            "hobbies": ["vẽ", "đọc truyện"],
+        })
+        self.memory.mark_profile_completed(child_id)
+        self.assertTrue(self.memory.is_profile_completed(child_id))
+
+        profile = self.memory.get_or_create_profile(child_id)
+        self.assertEqual(profile["gender"], "female")
+
+        # Context phải chứa giới tính để Robo xưng hô đúng
+        context = self.memory.build_memory_context(child_id)
+        self.assertIn("girl", context)
+        self.assertIn("hoạt bát", context)
+
+    def test_reset_setup_flag(self):
+        """Kiểm tra reset cờ setup không xóa dữ liệu hồ sơ"""
+        child_id = "kid_reset"
+        self.memory.update_profile(child_id, {"name": "Minh", "age": 8})
+        self.memory.mark_profile_completed(child_id)
+        self.assertTrue(self.memory.is_profile_completed(child_id))
+
+        # Reset cờ (mô phỏng endpoint DELETE /api/child/setup)
+        with self.memory._get_connection() as conn:
+            conn.execute("UPDATE child_profile SET profile_completed = 0 WHERE child_id = ?;", (child_id,))
+            conn.commit()
+
+        self.assertFalse(self.memory.is_profile_completed(child_id))
+        profile = self.memory.get_or_create_profile(child_id)
+        self.assertEqual(profile["name"], "Minh")  # dữ liệu vẫn còn
+
+    def test_personality_column_migration(self):
+        """Kiểm tra migration thêm cột personality cho DB cũ"""
+        # Tạo DB cũ không có cột personality bằng cách tạo bảng thủ công
+        import sqlite3
+        old_db = os.path.join(self.test_dir, "old.db")
+        conn = sqlite3.connect(old_db)
+        conn.execute("""
+            CREATE TABLE child_profile (
+                child_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                nickname TEXT,
+                age INTEGER,
+                grade TEXT,
+                favorite_color TEXT,
+                favorite_animal TEXT,
+                favorite_food TEXT,
+                favorite_character TEXT,
+                family_info TEXT,
+                hobbies TEXT,
+                learning_level TEXT DEFAULT 'Starters',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+        # Khởi tạo MemoryManager trên DB cũ phải tự thêm cột mà không lỗi
+        memory_old = MemoryManager(db_path=old_db)
+        with memory_old._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(child_profile);")
+            cols = {row["name"] for row in cursor.fetchall()}
+        self.assertIn("personality", cols)
+
 if __name__ == "__main__":
     unittest.main()

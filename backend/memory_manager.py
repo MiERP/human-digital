@@ -47,6 +47,7 @@ class MemoryManager:
                     name TEXT NOT NULL,
                     nickname TEXT,
                     age INTEGER,
+                    gender TEXT,
                     grade TEXT,
                     favorite_color TEXT,
                     favorite_animal TEXT,
@@ -55,10 +56,22 @@ class MemoryManager:
                     family_info TEXT, -- JSON format: {"mom": "Hoa", "dad": "Minh", "pet": "Cat Miu"}
                     hobbies TEXT,     -- JSON array: ["drawing", "swimming", "dinosaurs"]
                     learning_level TEXT DEFAULT 'Starters',
+                    personality TEXT, -- Mô tả tính cách / phong cách giao tiếp của bé
+                    profile_completed INTEGER DEFAULT 0, -- 1 khi phụ huynh đã điền xong màn setup
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+
+            # Migration: thêm các cột mới cho DB đã tồn tại từ phiên bản cũ.
+            cursor.execute("PRAGMA table_info(child_profile);")
+            existing_columns = {row["name"] for row in cursor.fetchall()}
+            if "personality" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN personality TEXT;")
+            if "gender" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN gender TEXT;")
+            if "profile_completed" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN profile_completed INTEGER DEFAULT 0;")
 
             # 2. Bảng kỷ niệm thường ngày (Episodic Memories)
             cursor.execute("""
@@ -122,9 +135,9 @@ class MemoryManager:
             
             # Tạo hồ sơ mặc định
             cursor.execute("""
-                INSERT INTO child_profile (child_id, name, nickname, age, learning_level, family_info, hobbies)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
-            """, (child_id, default_name, default_name, 6, 'Starters', json.dumps({}), json.dumps([])))
+                INSERT INTO child_profile (child_id, name, nickname, age, learning_level, family_info, hobbies, personality)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """, (child_id, default_name, default_name, 6, 'Starters', json.dumps({}), json.dumps([]), None))
             conn.commit()
             
             return {
@@ -134,7 +147,8 @@ class MemoryManager:
                 "age": 6,
                 "learning_level": "Starters",
                 "family_info": {},
-                "hobbies": []
+                "hobbies": [],
+                "personality": None
             }
 
     def update_profile_fact(self, child_id: str, key: str, value: Any) -> bool:
@@ -149,6 +163,7 @@ class MemoryManager:
             "favorite_food": "favorite_food",
             "favorite_character": "favorite_character",
             "learning_level": "learning_level",
+            "personality": "personality",
         }
 
         with self._get_connection() as conn:
@@ -188,6 +203,66 @@ class MemoryManager:
 
             conn.commit()
             logger.info(f"Updated profile fact for {child_id}: {key} = {value}")
+            return True
+
+    def update_profile(self, child_id: str, fields: Dict[str, Any]) -> bool:
+        """
+        Cập nhật toàn bộ hồ sơ từ phụ huynh (trang cấu hình). Khác với
+        update_profile_fact() — method này set nguyên giá trị của hobbies và
+        family_info (không append), vì phụ huynh đang gửi bộ dữ liệu hoàn chỉnh.
+        """
+        scalar_fields = {
+            "name", "nickname", "age", "gender", "grade", "favorite_color",
+            "favorite_animal", "favorite_food", "favorite_character",
+            "learning_level", "personality",
+        }
+        self.get_or_create_profile(child_id)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.now(timezone.utc).isoformat()
+
+            for key, value in fields.items():
+                if key in scalar_fields:
+                    cursor.execute(
+                        f"UPDATE child_profile SET {key} = ?, updated_at = ? WHERE child_id = ?;",
+                        (value, now, child_id),
+                    )
+                elif key == "hobbies" and isinstance(value, list):
+                    hobbies = [str(v).strip() for v in value if str(v).strip()]
+                    cursor.execute(
+                        "UPDATE child_profile SET hobbies = ?, updated_at = ? WHERE child_id = ?;",
+                        (json.dumps(hobbies), now, child_id),
+                    )
+                elif key == "family_info" and isinstance(value, dict):
+                    fam = {str(k): str(v) for k, v in value.items() if str(v).strip()}
+                    cursor.execute(
+                        "UPDATE child_profile SET family_info = ?, updated_at = ? WHERE child_id = ?;",
+                        (json.dumps(fam), now, child_id),
+                    )
+
+            conn.commit()
+            logger.info(f"Updated profile for {child_id} from parent config.")
+            return True
+
+    # ==================== First-Run Setup Methods ====================
+
+    def is_profile_completed(self, child_id: str) -> bool:
+        """Kiểm tra phụ huynh đã hoàn thành màn cấu hình ban đầu chưa."""
+        profile = self.get_or_create_profile(child_id)
+        return bool(profile.get("profile_completed"))
+
+    def mark_profile_completed(self, child_id: str) -> bool:
+        """Đánh dấu màn cấu hình ban đầu đã hoàn thành."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.now(timezone.utc).isoformat()
+            cursor.execute(
+                "UPDATE child_profile SET profile_completed = 1, updated_at = ? WHERE child_id = ?;",
+                (now, child_id),
+            )
+            conn.commit()
+            logger.info(f"Profile setup completed for {child_id}.")
             return True
 
     # ==================== Episodic Memory Methods ====================
@@ -315,10 +390,23 @@ class MemoryManager:
             f"- Child's Name/Nickname: {profile.get('nickname') or profile.get('name')} (Age: {profile.get('age', 6)})",
         ]
 
+        if profile.get("gender"):
+            gender_label = "boy" if profile["gender"].lower().startswith("male") else "girl"
+            lines.append(f"- Gender: {gender_label} (use appropriate pronouns)")
+
+        if profile.get("personality"):
+            lines.append(f"- Personality & Communication Style: {profile.get('personality')}")
+        if profile.get("grade"):
+            lines.append(f"- Grade: {profile.get('grade')}")
+        if profile.get("learning_level"):
+            lines.append(f"- English Level: {profile.get('learning_level')}")
+
         if profile.get("favorite_animal"):
             lines.append(f"- Favorite Animal: {profile.get('favorite_animal')}")
         if profile.get("favorite_color"):
             lines.append(f"- Favorite Color: {profile.get('favorite_color')}")
+        if profile.get("favorite_food"):
+            lines.append(f"- Favorite Food: {profile.get('favorite_food')}")
         if profile.get("favorite_character"):
             lines.append(f"- Favorite Superhero/Character: {profile.get('favorite_character')}")
         

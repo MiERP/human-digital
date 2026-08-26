@@ -1,10 +1,68 @@
-# 🤖 Digital Human AI English Tutor for Kids (Android + Gemini Live)
+# 🤖 Digital Human AI Tutor for Kids (Android + Gemini Live)
 
-Dự án trợ lý ảo Digital Human 2D Robot dạy tiếng Anh tương tác thời gian thực cho trẻ em, tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp (không cần LiveKit hay dịch vụ trung gian đắt tiền).
+Dự án trợ lý ảo Digital Human 2D Robot cho trẻ em từ 5–12 tuổi. Tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp (không cần LiveKit hay dịch vụ trung gian đắt tiền).
+
+## 🎯 Hai chế độ hoạt động
+
+### 1️⃣ Chế độ Bách khoa toàn thư (Encyclopedia Mode) — Knowledge
+Robo đóng vai một cuốn bách khoa toàn thư sinh động, trả lời các câu hỏi về **lịch sử, địa lý, khoa học tự nhiên, vũ trụ, thiên văn, động vật, nhân vật nổi tiếng…**
+
+Cơ chế hoạt động:
+- Khi bé hỏi "Hai Bà Trưng là ai?" nhưng **câu hỏi mơ hồ**, Robo sẽ tự động hỏi lại với 2–4 lựa chọn chủ đề hiển thị dưới dạng **chip bar** trên màn hình Android. Bé chỉ cần chạm vào chip phù hợp.
+- Khi chủ đề đã rõ (do bé nói rõ, hoặc sau khi hỏi lại), Robo gọi tool `search` để tìm **top 3 kết quả** đáng tin cậy nhất (Google Programmable Search Engine primary, fallback Wikipedia Simple English khi CSE không khả dụng).
+- Gemini tổng hợp 3 kết quả thành một đoạn văn ngắn gọn **3–5 câu**, ngôn ngữ thân thiện với trẻ em, xen lẫn 1–2 từ tiếng Anh về chủ đề.
+- Mọi URL đều qua bộ lọc an toàn trẻ em `ChildSafetyGuard.assert_safe_url()` — chỉ whitelist mới được phép.
+- **Cache in-memory 1 giờ** giúp tiết kiệm quota Google CSE và giảm độ trễ trả lời cho câu hỏi lặp lại.
+
+### 2️⃣ Chế độ Học tiếng Anh (English Mode) — Conversation
+Giữ nguyên toàn bộ tính năng English Buddy nguyên bản:
+- Trò chuyện song ngữ Việt ↔ Anh
+- Học từ vựng, ngữ pháp qua sửa lỗi tự nhiên (Recasting)
+- Lưu hồ sơ bé (tên, sở thích, gia đình, thú cưng…)
+- Theo dõi tiến độ học tập (`learning_progress`)
+
+**Robo tự động nhận diệt chế độ** dựa trên nội dung câu hỏi — KHÔNG cần nhấn nút chuyển. Câu hỏi kiến thức → Encyclopedia. Trò chuyện / học tiếng Anh → English mode. Hai chế độ chuyển qua lại linh hoạt trong cùng 1 phiên.
 
 ---
 
-## 🏗️ Kiến trúc Hệ thống
+## ⚙️ Cấu hình Backend (biến môi trường)
+
+| Biến | Mặc định | Mô tả |
+| --- | --- | --- |
+| `GEMINI_VOICE` | `Aoede` | Giọng prebuilt Gemini Live (Puck/Charon/Kore/Fenrir/Aoede/Leda) |
+| `ENABLE_TRANSCRIPTION` | `true` | Bật transcript input/output để đo lường & debug điểm cắt lượt |
+| `VAD_START_SENSITIVITY` | `high` | Ngưỡng nhận diện bắt đầu nói (`high` = ít nhiễu hơn) |
+| `VAD_END_SENSITIVITY` | `low` | Ngưỡng kết thúc nói (`low` = kết thúc lượt nhanh hơn) |
+| `VAD_SILENCE_DURATION_MS` | `1000` | Khoảng im lặng để server kết thúc lượt |
+| `VAD_PREFIX_PADDING_MS` | `200` | Padding trước điểm bắt đầu nói |
+| `ADMIN_API_KEY` | _(bắt buộc)_ | Khóa quản trị để phụ huynh cấu hình hồ sơ bé. Không đặt → endpoint admin bị tắt (fail-closed). |
+| `GOOGLE_CSE_ID` | _(rỗng)_ | ID của Google Programmable Search Engine (Encyclopedia Mode) |
+| `GOOGLE_CSE_KEY` | _(rỗng)_ | API key cho Custom Search API (Encyclopedia Mode) |
+
+### 🔍 Cách bật Google CSE cho Encyclopedia Mode (tùy chọn)
+
+Mặc định backend tự động dùng **Wikipedia Simple English** làm nguồn dữ liệu (miễn phí, không cần key). Nếu muốn kết quả phong phú hơn, hãy bật Google Programmable Search Engine:
+
+**Bước 1 — Tạo Search Engine** tại https://programmablesearchengine.google.com/ :
+- Tick **"Search the entire web"**
+- Ở mục **"Sites to search"**, thêm các domain giáo dục an toàn cho trẻ em:
+  - `*wikipedia.org`, `simple.wikipedia.org`, `*britannica.com`
+  - `*kids.nationalgeographic.com`, `*kiddle.co`
+  - `*duckduckgo.com`, `duckduckgo.com/html`, `*bbc.co.uk`
+- Lưu lại, copy **Search engine ID** (cx).
+
+**Bước 2 — Tạo API key** tại https://console.cloud.google.com/ :
+- APIs & Services → **Enable "Custom Search API"**
+- Credentials → Create credentials → API key
+- Copy **API key** vừa tạo.
+
+**Bước 3 — Điền vào `backend/.env`**:
+```bash
+GOOGLE_CSE_ID=your_cx_id_here
+GOOGLE_CSE_KEY=your_api_key_here
+```
+
+**Quota**: 100 query/ngày (free). Nếu vượt quota, backend tự động fallback về Wikipedia. Cache 1 giờ giúp giảm số lần gọi CSE cho câu hỏi lặp lại.
 
 ```
 [Điện thoại Android (Kotlin/Compose)]
@@ -35,8 +93,15 @@ Dự án trợ lý ảo Digital Human 2D Robot dạy tiếng Anh tương tác th
 human-digital/
 ├── backend/
 │   ├── main.py              # FastAPI WebSocket Proxy kết nối Gemini Live
+│   ├── search_engine.py     # ⭐ Knowledge search (CSE + Wikipedia) cho Encyclopedia Mode
+│   ├── safety_guard.py      # Child safety + SSRF protection
+│   ├── vietnamese_history.py# Curated history/science knowledge base
+│   ├── memory_manager.py    # SQLite cho profile, episodic memory, learning progress
+│   ├── static/
+│   │   ├── index.html       # Trang test giọng nói trực tiếp
+│   │   └── config.html      # ⭐ Trang cấu hình cá nhân hóa hồ sơ bé (phụ huynh)
 │   ├── requirements.txt     # Thư viện Python (google-genai, fastapi, uvicorn...)
-│   └── .env.example         # File mẫu chứa GEMINI_API_KEY
+│   └── .env.example         # File mẫu chứa GEMINI_API_KEY + GOOGLE_CSE_ID/KEY
 └── android/
     └── app/src/main/
         ├── AndroidManifest.xml
@@ -45,24 +110,23 @@ human-digital/
             │   ├── AudioRecorder.kt   # Thu âm 16kHz PCM từ micro
             │   └── AudioPlayer.kt     # Phát âm 24kHz PCM + tính Lip-sync
             ├── network/
-            │   └── GeminiLiveClient.kt # OkHttp WebSocket Client
+            │   └── GeminiLiveClient.kt # OkHttp WebSocket Client (+ clarification events)
             └── ui/
                 ├── RobotAvatar.kt      # 2D Robot vẽ bằng Jetpack Compose
-                └── MainActivity.kt     # Giao diện chính học tiếng Anh
+                └── MainActivity.kt     # ⭐ UI chính + ClarificationChipBar (Encyclopedia chip)
 ```
 
-## ⚙️ Cấu hình Backend (biến môi trường)
+## 🧒 Cá nhân hóa từng bé
 
-| Biến | Mặc định | Mô tả |
-| --- | --- | --- |
-| `GEMINI_VOICE` | `Puck` | Giọng prebuilt Gemini Live (Puck/Charon/Kore/Fenrir/Aoede) |
-| `ENABLE_TRANSCRIPTION` | `true` | Bật transcript input/output để đo lường & debug điểm cắt lượt |
-| `VAD_START_SENSITIVITY` | `high` | Ngưỡng nhận diện bắt đầu nói (`high` = ít nhiễu hơn) |
-| `VAD_END_SENSITIVITY` | `low` | Ngưỡng kết thúc nói (`low` = kết thúc lượt nhanh hơn) |
-| `VAD_SILENCE_DURATION_MS` | `600` | Khoảng im lặng để server kết thúc lượt |
-| `VAD_PREFIX_PADDING_MS` | `300` | Padding trước điểm bắt đầu nói |
+Mỗi bé là một hồ sơ riêng (tên, tuổi, sở thích, gia đình, **tính cách**). Robo dùng hồ sơ này để điều chỉnh giọng điệu và cách động viên cho đúng từng bé.
 
-Lưu ý: Android hiện dùng **Silero VAD on-device** (`com.github.gkonovalov.android-vad:silero`) để gate luồng audio — chỉ gửi âm thanh lên server khi thực sự có giọng nói, giảm nhiễu, giảm độ trễ và cải thiện khả năng barge-in.
+- Phụ huynh mở trang **`http://<backend>:8000/config`**, nhập `ADMIN_API_KEY` + `child_id`, điền hồ sơ và bấm **Lưu**.
+- Android app truyền `child_id` qua WebSocket URL (`ws://<backend>:8000/ws/live?child_id=...`) để gắn đúng hồ sơ.
+- Trường `personality` (tính cách / phong cách giao tiếp) được đưa vào system prompt để Robo "hiểu" bé.
+
+## 🎤 Lưu ý VAD on-device
+
+Android hiện dùng **Silero VAD on-device** (`com.github.gkonovalov.android-vad:silero`) để gate luồng audio — chỉ gửi âm thanh lên server khi thực sự có giọng nói, giảm nhiễu, giảm độ trễ và cải thiện khả năng barge-in.
 
 ---
 

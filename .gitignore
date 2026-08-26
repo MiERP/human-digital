@@ -28,3 +28,6 @@ local.properties
 # OS & Editor
 .vscode/
 Thumbs.db
+
+# Agent tooling
+.commandcode/

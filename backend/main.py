@@ -1,9 +1,11 @@
 import os
+import re
 import sys
 import json
 import asyncio
 import logging
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 
@@ -16,10 +18,14 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
+# load_dotenv() MUST run before importing search_engine: the module-level
+# singleton reads GOOGLE_CSE_ID / GOOGLE_CSE_KEY at import time, so loading
+# env vars after the import silently leaves CSE unconfigured.
+load_dotenv()
+
 from memory_manager import MemoryManager
 from safety_guard import ChildSafetyGuard
-
-load_dotenv()
+from search_engine import search_engine
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,12 +50,24 @@ app.add_middleware(
 
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 
+# Placeholder values are treated as "not configured". We fail closed: admin
+# endpoints are denied until a real key is set, instead of silently opening
+# child data (COPPA/GDPR) to anyone who can reach the backend.
+_ADMIN_KEY_PLACEHOLDERS = {"", "change_me_in_production", "your_admin_api_key_here"}
+
 def verify_admin_key(request: Request):
-    """Simple API key verification for parental/admin endpoints"""
+    """Fail-closed API key verification for parental/admin endpoints."""
+    if not ADMIN_API_KEY or ADMIN_API_KEY in _ADMIN_KEY_PLACEHOLDERS:
+        logger.error(
+            "ADMIN_API_KEY not configured. Admin endpoints are DISABLED until "
+            "a real key is set in the environment."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Admin API is not configured. Set a non-default ADMIN_API_KEY.",
+        )
+
     api_key = request.headers.get("X-Admin-Key") or request.query_params.get("admin_key")
-    if not ADMIN_API_KEY or ADMIN_API_KEY == "change_me_in_production":
-        logger.warning("ADMIN_API_KEY not configured or using default - admin endpoints should be protected in production!")
-        return True
     if not api_key or not secrets.compare_digest(api_key, ADMIN_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
     return True
@@ -58,19 +76,23 @@ class ChildProfileUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
     nickname: Optional[str] = Field(None, max_length=100)
     age: Optional[int] = Field(None, ge=3, le=15)
+    gender: Optional[str] = Field(None, max_length=20)
     grade: Optional[str] = Field(None, max_length=20)
     favorite_color: Optional[str] = Field(None, max_length=50)
     favorite_animal: Optional[str] = Field(None, max_length=50)
     favorite_food: Optional[str] = Field(None, max_length=50)
     favorite_character: Optional[str] = Field(None, max_length=50)
     learning_level: Optional[str] = Field(None, max_length=30)
+    personality: Optional[str] = Field(None, max_length=500)
+    hobbies: Optional[List[str]] = None
+    family_info: Optional[dict] = None
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     logger.warning("⚠️ CẢNH BÁO: GEMINI_API_KEY chưa được cấu hình. Vui lòng tạo file .env và điền key!")
 
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
-VOICE_NAME = os.getenv("GEMINI_VOICE", "Leda")
+VOICE_NAME = os.getenv("GEMINI_VOICE", "Aoede")
 ENABLE_TRANSCRIPTION = os.getenv("ENABLE_TRANSCRIPTION", "true").lower() in ("1", "true", "yes")
 
 # Server-side VAD tuning (Google docs: ai.google.dev/gemini-api/docs/live-api/best-practices).
@@ -97,8 +119,6 @@ ENABLE_AFFECTIVE_DIALOG = os.getenv("ENABLE_AFFECTIVE_DIALOG", "true").lower() i
 # bracketing each utterance. This eliminates server/client VAD race conditions.
 # See: https://ai.google.dev/gemini-api/docs/live-guide#disable-automatic-vad
 CLIENT_VAD_MODE = os.getenv("CLIENT_VAD_MODE", "true").lower() in ("1", "true", "yes")
-# Backward-compat alias
-HYBRID_VAD_MODE = CLIENT_VAD_MODE
 
 # Khởi tạo Memory Manager & Safety Guard
 memory_manager = MemoryManager()
@@ -113,7 +133,7 @@ You are FIRST a friend, SECOND a learning guide. Friendship comes first — you 
    to friends, not tutors. If the child wants to chat about anything (school, friends, pets,
    feelings, dreams), engage fully before nudging toward learning.
 2. **Answer their questions** with age-appropriate, factually accurate info. Use the
-   `search_knowledge` tool when you're not sure of a fact — never invent statistics,
+   `search` tool when you're not sure of a fact — never invent statistics,
    dates, or scientific claims.
 3. **Spark curiosity**: When the conversation stalls, gently suggest a topic the child
    might enjoy — a story, a "what if" question, a fun fact, a riddle.
@@ -131,12 +151,18 @@ You are FIRST a friend, SECOND a learning guide. Friendship comes first — you 
 - **Feelings & growing up**: friendship, family, dealing with anger/sadness, kindness
 
 For anything factual (dates, scientific claims, historical events, animal facts), CALL
-`search_knowledge` with a concise English query first, then translate the answer into
+`search` with a concise English query first, then translate the answer into
 friendly Vietnamese + English vocabulary the child can learn.
 
 ### 🗣️ Voice Persona (CRITICAL — drives your vocal delivery):
 - You have a warm, bright, youthful voice — like a beloved cartoon sidekick or Pixar mentor,
   but spoken with the natural rhythm of a Hanoi (Northern Vietnamese) speaker.
+- IMPORTANT: When pronouncing English words or sentences, use a clear standard
+  General American (US) accent. Rhotic "r" sounds (pronounce the "r" in words like
+  "car", "water", "shark"), flap "t" between vowels ("water" → "wadder", "better" →
+  "bedder"), and American vowel sounds ("can't", "dance" with the short flat "a").
+  Never use British pronunciation (no dropped "r", no "t" as glottal stop, no
+  long "ah" in "bath/grass").
 - Pace: clear and snappy, not slow or syrupy. Like a friend from Hanoi chatting — quick
   to the point, but never rushed. Pause briefly between thoughts, not within them.
 - Pitch: medium baseline, bright but grounded. Avoid overly sweet/sugary rises that
@@ -198,7 +224,7 @@ friendly Vietnamese + English vocabulary the child can learn.
 ### 🧠 Living Memory & Learning Tracker:
 - Actively remember what the child shares using the `save_child_fact` tool (pets, favorite colors, superhero, hobbies, family details).
 - Track English vocabulary the child knows or struggles with using `record_learning_progress`.
-- Search the web using `search_knowledge` whenever you're not sure of a fact — animals, science,
+- Search the web using `search` whenever you're not sure of a fact — animals, science,
   history, geography, famous people. Wikipedia is the default source. Keep queries in English
   for best results, then translate answers into friendly Vietnamese + English vocabulary.
 - Always personalize your speech using the child's living memory profile provided below!
@@ -229,6 +255,60 @@ friendly Vietnamese + English vocabulary the child can learn.
   topic nouns ("cá voi" → "whale", "khủng long" → "dinosaur"). Don't translate every
   word — only the new/interesting ones.
 - Switch to English if the child speaks English. Always stay simple and clear.
+"""
+
+# Block bổ sung cho Encyclopedia Mode — chèn vào system prompt ngay trước khi
+# gửi lên Gemini Live. Giúp model tự phân loại mode và biết cách dùng tool mới.
+ENCYCLOPEDIA_MODE_PROMPT = """
+
+### 🔍 Encyclopedia Mode (Knowledge Mode - the "Bách khoa toàn thư" toggle):
+
+When the child asks factual knowledge questions (history, geography, science,
+nature, space, animals, famous people, places, inventions), follow these rules:
+
+1. **Ambiguity check FIRST**: If the subject could belong to multiple topics
+   (e.g., "Hai Bà Trưng" could be history OR geography; "con voi" could be
+   biology OR location), call `request_clarification` with 2-4 short options
+   in Vietnamese, then STOP and wait for the child's choice (a chip will
+   appear in the app). Do NOT search yet.
+
+2. **Search before stating facts**: Once the topic is clear (either already
+   obvious from context or after clarification), call `search` with
+   `query` (Vietnamese or English) and `topic_hint` (one of: "history",
+   "geography", "science", "nature", "space", "famous_people"). The tool
+   returns up to 3 ranked results (title + snippet + source URL).
+
+3. **Synthesize naturally**: After receiving results, combine them into ONE
+   short kid-friendly paragraph (3-5 sentences, max ~80 words). Do NOT dump
+   raw URLs into your spoken reply. Cite source only briefly ("Theo Wikipedia...").
+   Sprinkle 1-2 English vocab words related to the topic.
+
+4. **Add curiosity hook**: End with ONE gentle follow-up question or fun
+   "did you know" fact so the conversation keeps flowing.
+
+5. **Mode detection rule of thumb**:
+   - Knowledge Q (who/what/when/where about facts) → Encyclopedia mode →
+     `search`.
+   - English practice / feelings / daily chat / jokes → English mode →
+     existing `save_child_fact` / `record_learning_progress` flow.
+   - Modes can switch fluidly in the same session.
+
+6. **Never fabricate**: NEVER invent dates, numbers, names, or scientific
+   claims. If `search` returns no results, say honestly: "Robo chưa tìm
+   được thông tin này, bạn thử hỏi theo cách khác nhé!"
+
+Examples:
+- Child: "Hai Bà Trưng là ai?"
+  → request_clarification(question="Hai Bà Trưng là ai?", options=["Lịch sử","Địa danh"])
+  → wait for chip...
+- Child taps "Lịch sử"
+  → search(query="Hai Bà Trưng", topic_hint="history")
+  → synthesize + sprinkle English ("Trưng Sisters")
+- Child: "Con cá voi xanh to cỡ nào?"
+  → search(query="blue whale size", topic_hint="nature")
+  → synthesize + add "Did you know its heart is as big as a small car?"
+- Child: "Hello Robo!" → English mode, no search.
+- Child: "Kể về súng đạn" → blocked by safety, redirect gently, do NOT search.
 """
 
 # Định nghĩa Tool Function Declarations cho Gemini Live
@@ -276,28 +356,17 @@ record_learning_tool_decl = types.FunctionDeclaration(
     )
 )
 
-safe_search_tool_decl = types.FunctionDeclaration(
-    name="safe_kid_search",
-    description="Search child-safe curated knowledge base for common topics (dinosaurs, animals, space). Use as a fast path before falling back to search_knowledge for uncommon topics.",
-    parameters=types.Schema(
-        type="OBJECT",
-        properties={
-            "query": types.Schema(
-                type="STRING",
-                description="The kid-friendly search query, e.g. 'how big is a blue whale', 'why are flamingos pink'"
-            )
-        },
-        required=["query"]
-    )
-)
-
-search_knowledge_tool_decl = types.FunctionDeclaration(
-    name="search_knowledge",
+# Tool: search — single knowledge search path.
+# Backend pipeline: curated knowledge base -> Google CSE (if configured) -> Wikipedia.
+search_tool_decl = types.FunctionDeclaration(
+    name="search",
     description=(
-        "Search Wikipedia for accurate factual information about animals, science, history, "
-        "geography, famous people, space, plants, weather, or any verifiable topic the child asks. "
-        "ALWAYS call this tool before stating specific facts (numbers, dates, names, scientific claims). "
-        "Query in English for best results. The tool returns a kid-safe summary."
+        "Search for accurate factual information about history, geography, science, nature, "
+        "space, animals, famous people, places or any knowledge topic. Returns up to 3 "
+        "ranked results with title, snippet, and source URL. Always call this tool before "
+        "stating specific facts (dates, numbers, names, scientific claims). Pass "
+        "`topic_hint` when you know the domain (e.g., 'history', 'nature'). If the query "
+        "is ambiguous, call `request_clarification` FIRST instead."
     ),
     parameters=types.Schema(
         type="OBJECT",
@@ -305,12 +374,50 @@ search_knowledge_tool_decl = types.FunctionDeclaration(
             "query": types.Schema(
                 type="STRING",
                 description=(
-                    "Concise English search query. Examples: 'blue whale size', 'Hai Ba Trung sisters', "
-                    "'solar system planets', 'why is the sky blue', 'Marie Curie biography'."
+                    "Search query in Vietnamese or English. Examples: 'Hai Bà Trưng', "
+                    "'blue whale size', 'solar system planets', 'Tokyo capital Japan'."
                 )
-            )
+            ),
+            "topic_hint": types.Schema(
+                type="STRING",
+                description=(
+                    "Optional topic hint to bias ranking: 'history', 'geography', 'science', "
+                    "'nature', 'space', 'famous_people'."
+                )
+            ),
         },
         required=["query"]
+    )
+)
+
+# Tool mới #2: request_clarification — yêu cầu bé chọn chủ đề qua UI chip.
+request_clarification_tool_decl = types.FunctionDeclaration(
+    name="request_clarification",
+    description=(
+        "Use ONLY when the child's knowledge question is ambiguous and could belong to "
+        "multiple topics. Backend will send a special UI event so the Android app shows "
+        "the options as quick-reply chips. Always stop the spoken reply (just briefly "
+        "acknowledge in Vietnamese: 'Bạn muốn tìm hiểu về... hay...?') and wait — do NOT "
+        "search yet. Provide 2-4 short, mutually exclusive option labels in Vietnamese."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "question": types.Schema(
+                type="STRING",
+                description="Original question from the child (verbatim or paraphrased)."
+            ),
+            "options": types.Schema(
+                type="ARRAY",
+                items=types.Schema(type="STRING"),
+                description="2-4 short option labels in Vietnamese, e.g. ['Lịch sử', 'Địa danh']."
+            ),
+            "context": types.Schema(
+                type="STRING",
+                description="Optional brief reason for clarification, e.g. 'Hai Bà Trưng có thể là nhân vật lịch sử hoặc địa danh'."
+            ),
+        },
+        required=["question", "options"]
     )
 )
 
@@ -318,8 +425,8 @@ LIVE_TOOLS = [
     types.Tool(function_declarations=[
         save_fact_tool_decl,
         record_learning_tool_decl,
-        safe_search_tool_decl,
-        search_knowledge_tool_decl,
+        search_tool_decl,
+        request_clarification_tool_decl,
     ])
 ]
 
@@ -337,6 +444,14 @@ def serve_web_test_page():
         return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
     return HTMLResponse(content="<h1>Static files not found. Place index.html in backend/static/</h1>")
 
+@app.get("/config", response_class=HTMLResponse)
+def serve_config_page():
+    """Trang cấu hình cá nhân hóa hồ sơ bé cho phụ huynh."""
+    config_path = STATIC_DIR / "config.html"
+    if config_path.exists():
+        return HTMLResponse(content=config_path.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>config.html not found</h1>", status_code=404)
+
 @app.get("/health")
 def health_check():
     return {
@@ -352,13 +467,48 @@ def get_child_profile(request: Request, child_id: str = "default_child"):
     verify_admin_key(request)
     return memory_manager.get_or_create_profile(child_id)
 
+@app.get("/api/child/setup")
+def get_child_setup_status(child_id: str = "default_child"):
+    """Trạng thái màn cấu hình ban đầu. App gọi khi mở để quyết định hiện màn setup."""
+    profile = memory_manager.get_or_create_profile(child_id)
+    return {
+        "setup_completed": bool(profile.get("profile_completed")),
+        "profile": profile,
+    }
+
+@app.post("/api/child/setup")
+def complete_child_setup(data: ChildProfileUpdate, child_id: str = "default_child"):
+    """First-run setup: phụ huynh điền hồ sơ bé ngay trên app (không cần admin key).
+    Được phép ghi 1 lần; muốn sửa lại phải dùng endpoint admin /api/child/profile."""
+    if memory_manager.is_profile_completed(child_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Profile already completed. Use the admin endpoint to update.",
+        )
+    update_dict = data.model_dump(exclude_none=True)
+    memory_manager.update_profile(child_id, update_dict)
+    memory_manager.mark_profile_completed(child_id)
+    return {"status": "success", "profile": memory_manager.get_or_create_profile(child_id)}
+
+@app.delete("/api/child/setup")
+def reset_child_setup(child_id: str = "default_child"):
+    """Reset cờ cấu hình để màn setup hiện lại. Không xóa dữ liệu hồ sơ/bộ nhớ."""
+    with memory_manager._get_connection() as conn:
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "UPDATE child_profile SET profile_completed = 0, updated_at = ? WHERE child_id = ?;",
+            (now, child_id),
+        )
+        conn.commit()
+    return {"status": "reset", "setup_completed": False}
+
 @app.post("/api/child/profile")
 def update_child_profile(data: ChildProfileUpdate, request: Request, child_id: str = "default_child"):
-    """Phụ huynh trực tiếp cập nhật thông tin bé (tên, tuổi, sở thích)"""
+    """Phụ huynh trực tiếp cập nhật hồ sơ cá nhân hóa của bé"""
     verify_admin_key(request)
     update_dict = data.model_dump(exclude_none=True)
-    for k, v in update_dict.items():
-        memory_manager.update_profile_fact(child_id, k, v)
+    memory_manager.update_profile(child_id, update_dict)
     return {"status": "success", "profile": memory_manager.get_or_create_profile(child_id)}
 
 @app.get("/api/child/export")
@@ -376,6 +526,21 @@ def delete_child_data(request: Request, child_id: str = "default_child"):
 
 # ==================== WebSocket Live Gemini Session ====================
 
+# Allowed characters for a child_id. It is used as an isolation key (not just a
+# label): it separates memory, learning progress, and search cache per child.
+# Keep it to URL-safe slug characters so it can be passed via ?child_id=... and
+# stored safely in SQLite without needing escaping.
+_CHILD_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+def _normalize_child_id(raw: Optional[str]) -> str:
+    """Return a safe child_id from user input, or fall back to the default."""
+    if raw:
+        raw = raw.strip()
+        if _CHILD_ID_RE.match(raw):
+            return raw
+        logger.warning(f"Ignoring invalid child_id (must be slug): {raw!r}")
+    return "default_child"
+
 @app.websocket("/ws/live")
 async def websocket_live_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -386,14 +551,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
-    child_id = "default_child"
+    # Each child gets their own Robo (separate memory, progress, and search
+    # cache). The Android app passes ?child_id=... in the WebSocket URL.
+    child_id = _normalize_child_id(websocket.query_params.get("child_id"))
+    logger.info(f"Session bound to child_id={child_id}")
 
     try:
         client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1beta"})
 
-        # Xây dựng System Prompt động kết hợp Living Memory
+        # Xây dựng System Prompt động kết hợp Living Memory + Encyclopedia Mode.
         dynamic_memory_context = memory_manager.build_memory_context(child_id)
-        full_system_prompt = f"{BASE_SYSTEM_PROMPT}\n\n{dynamic_memory_context}"
+        full_system_prompt = (
+            f"{BASE_SYSTEM_PROMPT}"
+            f"\n\n{ENCYCLOPEDIA_MODE_PROMPT}"
+            f"\n\n{dynamic_memory_context}"
+        )
 
         start_sensitivity = (
             types.StartSensitivity.START_SENSITIVITY_HIGH
@@ -484,9 +656,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 continue
 
                             action = payload.get("action")
-                            if action == "interrupt":
-                                logger.info("Client requested explicit interrupt.")
-                            elif action == "activity_start":
+                            if action == "activity_start":
                                 # Client VAD detected user bắt đầu nói.
                                 # Chỉ hợp lệ khi CLIENT_VAD_MODE=true (server auto-detect đã tắt).
                                 if CLIENT_VAD_MODE:
@@ -518,6 +688,34 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         logger.debug("Forwarded audio_stream_end to Gemini.")
                                     except Exception as e:
                                         logger.warning(f"Failed to send audio_stream_end: {e}")
+                            elif action == "clarification_response":
+                                # Android gửi lại lựa chọn mà bé đã tap trên chip bar.
+                                # Dùng send_client_content(turn_complete=True) để tạo MỘT
+                                # user turn hoàn chỉnh mà model chắc chắn phản hồi —
+                                # an toàn hơn send_realtime_input(text=...) khi server
+                                # VAD đang tắt + turn_coverage=TURN_INCLUDES_ONLY_ACTIVITY,
+                                # vốn có thể khiến một lượt text mồ côi không được nhận.
+                                choice = payload.get("choice", "").strip()
+                                if choice and choice.lower() not in ("", "null", "none"):
+                                    try:
+                                        turn_text = (
+                                            f"Bé đã chọn chủ đề: {choice}. "
+                                            "Hãy dùng search với topic_hint phù hợp "
+                                            "để trả lời câu hỏi lúc nãy."
+                                        )
+                                        await session.send_client_content(
+                                            turns=types.Content(
+                                                role="user",
+                                                parts=[types.Part(text=turn_text)],
+                                            ),
+                                            turn_complete=True,
+                                        )
+                                        logger.info(
+                                            f"clarification_response forwarded as "
+                                            f"completed user turn: '{choice}'"
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Failed to send clarification turn: {e}")
                 except WebSocketDisconnect:
                     logger.info("Client disconnected from WebSocket.")
                 except asyncio.CancelledError:
@@ -559,35 +757,78 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             practice = fn_args.get("needs_practice", [])
                                             memory_manager.update_learning_progress(child_id, topic, mastered, practice)
                                             tool_output_text = f"Updated learning progress for topic '{topic}'."
-                                        elif fn_name == "safe_kid_search":
+                                        elif fn_name == "search":
+                                            # Single knowledge search path: curated -> CSE -> Wikipedia.
                                             query = fn_args.get("query", "")
-                                            search_res = await safety_guard.safe_kid_search(query, child_id)
-                                            tool_output_text = search_res.get("summary") or search_res.get("safe_message", "No info found")
-                                        elif fn_name == "search_knowledge":
-                                            query = fn_args.get("query", "")
-                                            search_res = safety_guard.search_knowledge(query, child_id)
-                                            # Trả cả summary + source để Gemini có thể cite nguồn cho bé
-                                            summary = search_res.get("summary", "")
-                                            title = search_res.get("title", "")
-                                            source = search_res.get("source", "Wikipedia")
-                                            is_curated = search_res.get("is_curated", False)
-                                            era = search_res.get("era", "")
+                                            topic_hint = fn_args.get("topic_hint")
+                                            search_res = await search_engine.search(
+                                                query, top_k=3, topic_hint=topic_hint, child_id=child_id
+                                            )
                                             if search_res.get("is_blocked"):
-                                                tool_output_text = search_res.get("safe_message", "Robo không tìm được thông tin phù hợp.")
-                                            elif search_res.get("success"):
-                                                # Curated: trả cả tiếng Việt + tiếng Anh để Gemini dùng song ngữ
-                                                # Wikipedia: chỉ trả tiếng Anh (model sẽ dịch)
-                                                if is_curated and search_res.get("summary_en"):
-                                                    tool_output_text = (
-                                                        f"[{source}]\n"
-                                                        f"Tiếng Việt: {summary}\n"
-                                                        f"English: {search_res['summary_en']}"
-                                                    )
+                                                tool_output_text = (
+                                                    search_res.get("safe_message")
+                                                    or "Robo không tìm được thông tin phù hợp."
+                                                )
+                                            elif search_res.get("success") and search_res.get("results"):
+                                                backend = search_res.get("source_backend")
+                                                if backend == "curated":
+                                                    # Curated kid-safe fact: trả song ngữ để model sprinkle.
+                                                    r0 = search_res["results"][0]
+                                                    parts = [f"[Curated: {r0['source']}]", f"Tiếng Việt: {r0['snippet']}"]
+                                                    if r0.get("snippet_en"):
+                                                        parts.append(f"English: {r0['snippet_en']}")
+                                                    tool_output_text = "\n".join(parts)
                                                 else:
-                                                    tool_output_text = f"[{source}: {title}]\n{summary}"
-                                                logger.info(f"Knowledge search: '{query}' → {title} (curated={is_curated}, era={era})")
+                                                    formatted: list = []
+                                                    for r in search_res["results"]:
+                                                        formatted.append(
+                                                            f"[{r['rank']}] {r['title']}\n"
+                                                            f"{r['snippet']}\n"
+                                                            f"Source: {r['source']} ({r['source_url']})"
+                                                        )
+                                                    tool_output_text = (
+                                                        f"Search backend: {backend}\n\n"
+                                                        + "\n\n".join(formatted)
+                                                    )
+                                                logger.info(
+                                                    f"search: '{query}' (topic={topic_hint}) → "
+                                                    f"{len(search_res['results'])} results "
+                                                    f"via {backend}"
+                                                )
                                             else:
-                                                tool_output_text = summary or "No information found."
+                                                tool_output_text = (
+                                                    search_res.get("safe_message")
+                                                    or "Robo không tìm được thông tin phù hợp."
+                                                )
+                                        elif fn_name == "request_clarification":
+                                            # Gửi UI event qua WebSocket để Android hiện chip chọn.
+                                            question = fn_args.get("question", "")
+                                            options = fn_args.get("options", []) or []
+                                            context_text = fn_args.get("context", "")
+                                            try:
+                                                await websocket.send_text(json.dumps({
+                                                    "event": "clarification_request",
+                                                    "question": question,
+                                                    "options": options,
+                                                    "context": context_text,
+                                                }))
+                                                logger.info(
+                                                    f"clarification_request sent: q='{question}' "
+                                                    f"options={options}"
+                                                )
+                                            except Exception as send_err:
+                                                logger.warning(f"Failed to send clarification_request: {send_err}")
+                                            # Hướng dẫn model phản hồi ĐÚNG một câu hỏi ngắn rồi DỪNG
+                                            # lượt — không mô tả kỹ thuật, không liệt kê options thô,
+                                            # và CHỜ lựa chọn của bé (chip hoặc nói lại).
+                                            options_str = " hay ".join(options) if options else "một chủ đề"
+                                            tool_output_text = (
+                                                f"Hãy nói ĐÚNG MỘT câu hỏi ngắn, thân thiện với bé để hỏi "
+                                                f"em muốn tìm hiểu về {options_str} (hoặc nói lại). "
+                                                f"Xong DỪNG LẠI NGAY và CHỜ bé chọn — KHÔNG trả lợi, "
+                                                f"KHÔNG tự kể thông tin, KHÔNG gọi thêm tool nào. "
+                                                f"Khi bé chọn, bạn sẽ gọi search với topic_hint phù hợp."
+                                            )
                                     except Exception as tool_err:
                                         logger.error(f"Error executing tool {fn_name}: {tool_err}")
                                         tool_output_text = f"Tool execution completed."

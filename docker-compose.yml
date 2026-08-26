@@ -16,7 +16,7 @@ services:
       - VAD_END_SENSITIVITY=${VAD_END_SENSITIVITY:-low}
       - VAD_SILENCE_DURATION_MS=${VAD_SILENCE_DURATION_MS:-1000}
       - VAD_PREFIX_PADDING_MS=${VAD_PREFIX_PADDING_MS:-200}
-      - ADMIN_API_KEY=${ADMIN_API_KEY:-change_me_in_production}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
       - ENV=production
       - HOST=0.0.0.0

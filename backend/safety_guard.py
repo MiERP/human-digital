@@ -1,12 +1,9 @@
 import os
 import re
-import json
 import ipaddress
 import socket
 import logging
-import urllib.request
-import urllib.parse
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 
@@ -19,13 +16,16 @@ class ChildSafetyGuard:
     - Chống lỗ hổng SSRF (Server-Side Request Forgery) khi tra cứu Internet
     - Chuyển hướng sư phạm nhẹ nhàng, khéo léo (Pedagogical Redirection)
     - Ghi nhận Audit Log để phụ huynh theo dõi
+
+    Note: Kiến thức tìm kiếm (curated/CSE/Wikipedia) nằm trong search_engine.py —
+    class này chỉ chịu trách nhiệm filter nội dung + validate URL, không gọi HTTP.
     """
 
     # Danh mục từ khóa & mẫu quy tắc nhạy cảm (Đa ngôn ngữ Anh - Việt)
     VIOLENCE_PATTERNS = [
         r"\b(kill|murder|weapon|gun|knife|stab|blood|suicide|die|hurt myself|tự tử|chết|giết|đánh nhau|vũ khí|súng|dao|chém)\b"
     ]
-    
+
     ADULT_PATTERNS = [
         r"\b(sex|porn|nude|naked|condom|kissing on lips|tình dục|khiêu dâm|khỏa thân|người lớn 18\+)\b"
     ]
@@ -40,15 +40,35 @@ class ChildSafetyGuard:
         r"\b(password|mật khẩu|mã pin|số tài khoản|địa chỉ nhà cụ thể ở đâu)\b"
     ]
 
-    # Whitelist các domain giáo dục an toàn cho trẻ em khi tra cứu Internet
+    # Whitelist các domain giáo dục an toàn cho trẻ em khi tra cứu Internet.
+    #
+    # SECURITY NOTE: google.com / googleapis.com are deliberately EXCLUDED.
+    # assert_safe_url() matches any subdomain of a whitelisted root
+    # (hostname.endswith("." + d)), so whitelisting "google.com" would allow
+    # EVERY *.google.com host as a "safe content source" — far too broad for
+    # SSRF protection. The Google CSE endpoint (www.googleapis.com) is called
+    # directly inside search_engine._search_google_cse() and never passes
+    # through assert_safe_url(), so it does not need to be whitelisted here.
+    #
+    # This whitelist is ONLY for validating content URLs returned by search
+    # (Wikipedia pages, Britannica articles, Kiddle pages...). Keep it to
+    # genuinely educational content sources.
     ALLOWED_KID_DOMAINS = {
         "kids.nationalgeographic.com",
         "kids.britannica.com",
         "simple.wikipedia.org",
+        "wikipedia.org",
+        "en.wikipedia.org",
         "pbskids.org",
         "nasa.gov",
         "kiddle.co",
-        "duckduckgo.com"
+        "duckduckgo.com",
+        "britannica.com",
+        "nationalgeographic.com",
+        "bbc.co.uk",
+        "bbc.com",
+        "worldwildlife.org",
+        "smithsonianmag.com",
     }
 
     def __init__(self, log_path: Optional[str] = None):
@@ -57,7 +77,7 @@ class ChildSafetyGuard:
             data_dir = os.path.join(base_dir, "data")
             os.makedirs(data_dir, exist_ok=True)
             log_path = os.path.join(data_dir, "safety_audit.log")
-        
+
         self.log_path = log_path
 
     def _log_safety_event(self, child_id: str, category: str, trigger_text: str, action: str):
@@ -164,205 +184,3 @@ class ChildSafetyGuard:
         except Exception as e:
             logger.error(f"Error validating safe URL '{raw_url}': {e}")
             return False
-
-    async def safe_kid_search(self, query: str, child_id: str = "default_child") -> Dict[str, Any]:
-        """
-        Công cụ tra cứu kiến thức Internet an toàn có chọn lọc cho trẻ em:
-        - Kiểm duyệt an toàn câu truy vấn trước khi tìm
-        - Trả về thông tin khoa học/tự nhiên ngắn gọn, phù hợp lứa tuổi 5-12
-        """
-        is_safe, category, redirect = self.evaluate_content(query, child_id)
-        if not is_safe:
-            return {
-                "success": False,
-                "is_blocked": True,
-                "reason": category,
-                "safe_message": redirect
-            }
-
-        # Cung cấp tri thức bách khoa thiếu nhi đã kiểm duyệt theo chủ đề (Kho từ điển kiến thức an toàn)
-        curated_knowledge = {
-            "dinosaur": "Dinosaurs were amazing reptiles that lived millions of years ago! The T-Rex had huge teeth, and the Brachiosaurus had a super long neck to eat leaves from tall trees.",
-            "blue whale": "The Blue Whale is the largest animal ever known to have lived on Earth! Even bigger than the biggest dinosaur. Its heart is as big as a small car!",
-            "hummingbird": "Hummingbirds are the tiniest birds in the world! They can flap their wings up to 80 times per second and can fly backwards.",
-            "rainbow": "A rainbow happens when sunlight shines through raindrops in the sky. The light bends and splits into 7 beautiful colors: Red, Orange, Yellow, Green, Blue, Indigo, and Violet!",
-            "space": "Outer space has 8 planets in our Solar System! Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune. Earth is the only one with liquid water and life.",
-            "cheetah": "Cheetahs are the fastest land animals! They can run as fast as a car on a highway for short sprints."
-        }
-
-        q_lower = query.lower()
-        for key, fact in curated_knowledge.items():
-            if key in q_lower:
-                return {
-                    "success": True,
-                    "query": query,
-                    "source": "Kids Curated Encyclopedia",
-                    "summary": fact
-                }
-
-        # Nếu không có trong kho có sẵn, trả về tóm tắt định hướng an toàn
-        return {
-            "success": True,
-            "query": query,
-            "source": "Safe Kid Knowledge Base",
-            "summary": f"This is an interesting topic about '{query}'! It is wonderful for young learners to explore nature, science, animals, and friendly English words about this topic."
-        }
-
-    # Simple English Wikipedia REST API endpoints — free, no auth required.
-    # Simple English dùng văn phong đơn giản hơn (Basic English 850 từ) nên dễ hiểu hơn
-    # cho trẻ em so với Wikipedia tiếng Anh thông thường. Tất cả article cũng được kiểm duyệt
-    # bởi cộng đồng Wikipedia.
-    WIKI_SUMMARY_URL = "https://simple.wikipedia.org/api/rest_v1/page/summary/{title}"
-    WIKI_SEARCH_URL  = "https://simple.wikipedia.org/w/api.php?action=opensearch&format=json&limit=5&search={query}"
-
-    # Blocked Wikipedia categories — for safety we filter out topics that touch
-    # violence / adult content even if framed historically/educationally.
-    BLOCKED_CATEGORIES = {
-        "violence", "war", "weapon", "death", "murder", "torture", "abuse",
-        "sexual", "pornography", "nudity", "genitals", "prostitution",
-        "drug", "narcotic", "suicide", "self-harm",
-    }
-
-    # Maximum summary length to keep responses kid-sized.
-    MAX_SUMMARY_CHARS = 600
-
-    def search_knowledge(self, query: str, child_id: str = "default_child", lang: str = "en") -> Dict[str, Any]:
-        """
-        Tìm kiếm tri thức cho trẻ em theo thứ tự ưu tiên:
-        1. Curated knowledge base (vietnamese_history.py) — chính xác nhất, viết tay
-        2. Simple English Wikipedia — văn phong đơn giản, dễ hiểu cho trẻ
-        Returns: dict với title, summary, source URL, hoặc error info.
-
-        Flow:
-        1. Safety filter the input query
-        2. Curated lookup (ưu tiên)
-        3. Wikipedia Simple English (fallback)
-        4. Truncate + return cho model
-        """
-        is_safe, category, redirect = self.evaluate_content(query, child_id)
-        if not is_safe:
-            return {
-                "success": False,
-                "is_blocked": True,
-                "reason": category,
-                "safe_message": redirect
-            }
-
-        # Reject queries that hint at blocked categories
-        q_lower = query.lower()
-        for blocked in self.BLOCKED_CATEGORIES:
-            if blocked in q_lower:
-                self._log_safety_event(child_id, "BLOCKED_CATEGORY", query, "BLOCK_AND_REDIRECT")
-                return {
-                    "success": False,
-                    "is_blocked": True,
-                    "reason": "BLOCKED_CATEGORY",
-                    "safe_message": (
-                        "Câu hỏi này khá nhạy cảm với bé. Robo không tìm được thông tin phù hợp. "
-                        "Mình cùng tìm hiểu chủ đề khác vui hơn nhé!"
-                    )
-                }
-
-        # ===== Priority 1: Curated knowledge base =====
-        try:
-            from vietnamese_history import lookup_curated
-            curated_result = lookup_curated(query)
-            if curated_result:
-                entry, key, source = curated_result
-                # Trả summary tiếng Việt (primary) + gợi ý dùng song ngữ
-                summary_vi = entry.get("vi", "")
-                summary_en = entry.get("en", "")
-                en_figures = entry.get("key_figures", [])
-                era = entry.get("era", "")
-
-                self._log_safety_event(child_id, "KNOWLEDGE_CURATED", query, f"FOUND:{key}")
-                return {
-                    "success": True,
-                    "query": query,
-                    "title": entry.get("key_figures", [key])[0] if entry.get("key_figures") else key,
-                    "source": source,
-                    "source_url": None,
-                    "summary": summary_vi,
-                    "summary_en": summary_en,
-                    "era": era,
-                    "is_curated": True,
-                }
-        except Exception as e:
-            logger.warning(f"Curated lookup failed for '{query}': {e}")
-
-        try:
-            title = self._wikipedia_search(query)
-            if not title:
-                return {
-                    "success": False,
-                    "query": query,
-                    "is_blocked": False,
-                    "summary": f"Robo không tìm thấy thông tin về '{query}'. Bạn thử hỏi cách khác xem sao?"
-                }
-
-            summary = self._wikipedia_summary(title)
-            if not summary:
-                return {
-                    "success": False,
-                    "query": query,
-                    "is_blocked": False,
-                    "summary": f"Robo chưa có thông tin về '{query}'. Mình thử chủ đề khác nhé!"
-                }
-
-            self._log_safety_event(child_id, "KNOWLEDGE_SEARCH", query, f"FOUND:{title}")
-            return {
-                "success": True,
-                "query": query,
-                "title": title,
-                "source": f"Wikipedia: {title}",
-                "source_url": f"https://simple.wikipedia.org/wiki/{urllib.parse.quote(title)}",
-                "summary": summary
-            }
-
-        except Exception as e:
-            logger.error(f"Wikipedia search failed for '{query}': {e}")
-            return {
-                "success": False,
-                "query": query,
-                "is_blocked": False,
-                "summary": "Robo không tìm được thông tin lúc này. Bạn thử lại sau nhé!"
-            }
-
-    def _wikipedia_search(self, query: str) -> Optional[str]:
-        """OpenSearch → trả về article title khớp nhất, hoặc None."""
-        try:
-            url = self.WIKI_SEARCH_URL.format(query=urllib.parse.quote(query))
-            req = urllib.request.Request(url, headers={"User-Agent": "RoboEnglishBuddy/1.0 (educational)"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            # OpenSearch format: [query, [titles], [descriptions], [urls]]
-            if len(data) >= 2 and data[1]:
-                return data[1][0]  # best match
-        except Exception as e:
-            logger.warning(f"Wikipedia opensearch failed: {e}")
-        return None
-
-    def _wikipedia_summary(self, title: str) -> Optional[str]:
-        """Lấy plain-text extract của article, truncate để phù hợp trẻ em."""
-        try:
-            url = self.WIKI_SUMMARY_URL.format(title=urllib.parse.quote(title))
-            req = urllib.request.Request(url, headers={"User-Agent": "RoboEnglishBuddy/1.0 (educational)"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            extract = data.get("extract", "").strip()
-            if not extract:
-                return None
-            # Truncate tại câu gần nhất để giữ kid-friendly
-            if len(extract) > self.MAX_SUMMARY_CHARS:
-                truncated = extract[:self.MAX_SUMMARY_CHARS]
-                # Cắt tại dấu chấm cuối cùng
-                last_period = truncated.rfind(". ")
-                if last_period > 100:
-                    truncated = truncated[:last_period + 1]
-                else:
-                    truncated += "..."
-                return truncated
-            return extract
-        except Exception as e:
-            logger.warning(f"Wikipedia summary fetch failed for '{title}': {e}")
-        return None

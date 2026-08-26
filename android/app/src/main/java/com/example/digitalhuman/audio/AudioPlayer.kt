@@ -35,6 +35,9 @@ class AudioPlayer(
 
         // Không chờ pre-buffer quá lâu để giữ độ trễ hội thoại ở mức thấp.
         private const val MAX_PREBUFFER_WAIT_MS = 250L
+
+        // Khuếch đại âm lượng phát lại (giọng Gemini có biên độ thấp).
+        private const val VOLUME_GAIN = 1.5f
     }
 
     private var audioTrack: AudioTrack? = null
@@ -60,7 +63,7 @@ class AudioPlayer(
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -103,7 +106,7 @@ class AudioPlayer(
                     }
                     silentCycles = 0
 
-                    audioTrack?.write(chunk, 0, chunk.size)
+                    audioTrack?.write(applyGain(chunk), 0, chunk.size)
 
                     // Tính biên độ âm lượng để nhép môi Robot
                     val amplitude = calculateRMS(chunk)
@@ -168,6 +171,19 @@ class AudioPlayer(
         }
         audioTrack = null
         onPlaybackStateChanged(false)
+    }
+
+    private fun applyGain(audioData: ByteArray): ByteArray {
+        if (VOLUME_GAIN == 1.0f) return audioData
+        val result = ByteArray(audioData.size)
+        val shortCount = audioData.size / 2
+        for (i in 0 until shortCount) {
+            val sample = ((audioData[i * 2].toInt() and 0xFF) or (audioData[i * 2 + 1].toInt() shl 8)).toShort()
+            val amplified = (sample * VOLUME_GAIN).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            result[i * 2] = (amplified and 0xFF).toByte()
+            result[i * 2 + 1] = ((amplified shr 8) and 0xFF).toByte()
+        }
+        return result
     }
 
     private fun calculateRMS(audioData: ByteArray): Float {

@@ -56,6 +56,13 @@ class AudioRecorder(
 
         // Fallback khi Silero VAD không khởi tạo được (mất model/ONNX lỗi).
         private const val RMS_FALLBACK_THRESHOLD = 0.05f
+
+        // Chỉ chốt "bé đang nói" khi có ít nhất 2 frame liên tiếp là speech.
+        // Chống nhiễu ngẫu nhiên 1 frame bị VAD nhận nhầm thành giọng nói.
+        private const val SPEECH_ONSET_FRAMES = 2
+
+        // Gia hạn echo gate sau chunk audio cuối cùng của Robo (che khoảng dừng giữa câu).
+        private const val PLAYBACK_GRACE_MS = 500L
     }
 
     private var audioRecord: AudioRecord? = null
@@ -69,6 +76,11 @@ class AudioRecorder(
 
     @Volatile
     var isPlaybackActive = false
+
+    // Chốt "loa đang phát" thêm một khoảng nghỉ ngắn sau chunk cuối cùng để che
+    // các khoảng dừng giữa câu của Robo (nếu không, echo lọt vào ngay lúc đó).
+    @Volatile
+    private var playbackGraceUntil = 0L
 
     @SuppressLint("MissingPermission")
     fun startRecording(scope: CoroutineScope) {
@@ -114,14 +126,17 @@ class AudioRecorder(
                 .setContext(context)
                 .setSampleRate(SampleRate.SAMPLE_RATE_16K)
                 .setFrameSize(FrameSize.FRAME_SIZE_512)
-                .setMode(Mode.NORMAL)
-                .setSpeechDurationMs(80)
-                .setSilenceDurationMs(700)
+                .setMode(Mode.AGGRESSIVE)
+                .setSpeechDurationMs(120)
+                .setSilenceDurationMs(600)
                 .build()
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
+
+        // Lớp lọc gió + tạp âm phần mềm (high-pass + adaptive noise gate).
+        val noiseCleaner = NoiseCleaner()
 
         audioRecord?.startRecording()
         isRecording = true
@@ -132,6 +147,7 @@ class AudioRecorder(
             var userSpeaking = false
             var tailFrames = 0
             var frameOffset = 0
+            var speechOnsetFrames = 0
 
             while (isActive && isRecording) {
                 // Đọc đủ đúng 1024 byte (512 mẫu) cho Silero VAD; AudioRecord có thể
@@ -144,15 +160,40 @@ class AudioRecorder(
                 frameOffset = 0
                 val frameData = frame.copyOf()
 
+                // Lọc gió + tạp âm trước khi đưa vào VAD và stream lên server.
+                // cleanInPlace zero-out frame nhiễu; trả về RMS sau lọc cho fallback VAD.
+                val cleanRms = noiseCleaner.cleanInPlace(frameData)
+
                 // Âm lượng hiển thị (RMS chỉ dùng cho UI, không dùng để quyết định gửi audio).
                 val rawRms = calculateRawRMS(frameData)
                 onInputVolume((rawRms * 4.0f).coerceIn(0.0f, 1.0f))
 
-                // Silero VAD phát hiện giọng nói; fallback RMS nếu VAD không khả dụng.
-                val isSpeech = vad?.isSpeech(frameData) ?: (rawRms > RMS_FALLBACK_THRESHOLD)
+                // Echo gate: khi Robo đang phát (có gia hạn ngắn sau chunk cuối),
+                // không được phép trigger speech để tránh tiếng loa vọng ngược vào
+                // micro bị hiểu nhầm là bé đang nói -> cắt ngang câu trả lời.
+                val now = System.currentTimeMillis()
+                val playbackBlocked = isPlaybackActive || now < playbackGraceUntil
 
-                if (isSpeech) {
+                // Silero VAD phát hiện giọng nói; fallback RMS nếu VAD không khả dụng.
+                val vadInstance = vad
+                val isSpeech = if (vadInstance != null) {
+                    vadInstance.isSpeech(frameData)
+                } else {
+                    cleanRms > RMS_FALLBACK_THRESHOLD
+                }
+
+                if (isSpeech && !playbackBlocked) {
+                    // Debounce: yêu cầu 2 frame liên tiếp để chốt "bé bắt đầu nói".
+                    // Frame đầu tiên vẫn được đệm vào pre-roll nên không mất âm tiết.
                     if (!userSpeaking) {
+                        speechOnsetFrames++
+                        if (speechOnsetFrames < SPEECH_ONSET_FRAMES) {
+                            preRoll.addLast(frameData)
+                            while (preRoll.size > PRE_ROLL_FRAMES) {
+                                preRoll.removeFirst()
+                            }
+                            continue
+                        }
                         userSpeaking = true
                         tailFrames = 0
 
@@ -163,18 +204,27 @@ class AudioRecorder(
                         onSpeechStarted()
                     }
                     onAudioChunk(frameData)
-                } else if (userSpeaking) {
+                } else if (userSpeaking && !playbackBlocked) {
                     // Kéo dài một đoạn đuôi sau khi hết nói để server kết thúc lượt tự nhiên.
                     onAudioChunk(frameData)
                     tailFrames++
                     if (tailFrames >= TAIL_FRAMES) {
                         userSpeaking = false
                         tailFrames = 0
+                        speechOnsetFrames = 0
                         onSpeechEnded()
                     }
+                } else if (userSpeaking && playbackBlocked) {
+                    // Loa bất ngờ phát (Robo vừa trả lời trước khi lượt nói chốt).
+                    // Kết thúc lượt ngay, không gửi audio echo lên server.
+                    userSpeaking = false
+                    tailFrames = 0
+                    speechOnsetFrames = 0
+                    onSpeechEnded()
                 } else {
                     // Đang im lặng: chỉ đệm pre-roll, không gửi liên tục.
                     // Khi loa đang phát, không đệm tiếng vọng của robot để tránh echo khi barge-in.
+                    speechOnsetFrames = 0
                     if (!isPlaybackActive) {
                         preRoll.addLast(frameData)
                         while (preRoll.size > PRE_ROLL_FRAMES) {
@@ -184,6 +234,15 @@ class AudioRecorder(
                 }
             }
         }
+    }
+
+    /**
+     * MainActivity gọi khi nhận được một audio chunk mới từ Gemini (Robo đang nói).
+     * Gia hạn echo gate thêm một khoảng ngắn sau chunk cuối để che các khoảng
+     * dừng giữa câu, ngăn echo lọt vào giữa câu trả lời.
+     */
+    fun onPlaybackChunkReceived() {
+        playbackGraceUntil = System.currentTimeMillis() + PLAYBACK_GRACE_MS
     }
 
     fun stopRecording() {

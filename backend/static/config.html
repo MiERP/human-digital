@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cấu hình cá nhân hóa Robo cho bé</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
+    <div class="max-w-2xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-2xl md:text-3xl font-black tracking-wide text-cyan-400">🤖 Cấu hình Robo cho bé</h1>
+            <p class="text-slate-400 text-sm mt-2">
+                Phụ huynh điền hồ sơ để Robo hiểu tên, tuổi, sở thích và tính cách của bé.
+                Mỗi bé dùng một <span class="text-cyan-300 font-semibold">Mã bé (child_id)</span> riêng.
+            </p>
+        </header>
+
+        <div class="bg-slate-800/70 border border-slate-700 rounded-2xl p-6 space-y-5">
+            <!-- Kết nối / xác thực -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-1">Mã bé (child_id) *</label>
+                    <input id="childId" type="text" placeholder="vd: be_minh, be_an" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    <p class="text-xs text-slate-500 mt-1">Chỉ dùng chữ cái, số, dấu gạch. Phải khớp với app trên điện thoại.</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-1">Khóa quản trị (ADMIN_API_KEY) *</label>
+                    <input id="adminKey" type="password" placeholder="Nhập ADMIN_API_KEY" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                </div>
+            </div>
+
+            <div class="border-t border-slate-700"></div>
+
+            <!-- Thông tin cơ bản -->
+            <div>
+                <h2 class="text-lg font-bold text-cyan-300 mb-3">Thông tin cơ bản</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Tên bé</label>
+                        <input id="name" type="text" placeholder="vd: Minh" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Tên gọi thân mật</label>
+                        <input id="nickname" type="text" placeholder="vd: Bin, Mít" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Tuổi (3–15)</label>
+                        <input id="age" type="number" min="3" max="15" placeholder="vd: 7" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Lớp</label>
+                        <input id="grade" type="text" placeholder="vd: Lớp 2" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Trình độ tiếng Anh</label>
+                        <select id="learningLevel" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
+                            <option value="Starters">Starters (mới bắt đầu)</option>
+                            <option value="Movers">Movers</option>
+                            <option value="Flyers">Flyers</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="border-t border-slate-700"></div>
+
+            <!-- Sở thích -->
+            <div>
+                <h2 class="text-lg font-bold text-cyan-300 mb-3">Sở thích</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Màu yêu thích</label>
+                        <input id="favoriteColor" type="text" placeholder="vd: Xanh dương" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Con vật yêu thích</label>
+                        <input id="favoriteAnimal" type="text" placeholder="vd: Mèo" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Món ăn yêu thích</label>
+                        <input id="favoriteFood" type="text" placeholder="vd: Bánh pizza" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Nhân vật yêu thích</label>
+                        <input id="favoriteCharacter" type="text" placeholder="vd: Người Nhện" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <label class="block text-sm font-semibold text-slate-300 mb-1">Sở thích khác (cách nhau bằng dấu phẩy)</label>
+                    <input id="hobbies" type="text" placeholder="vd: vẽ tranh, bơi lội, khủng long" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                </div>
+            </div>
+
+            <div class="border-t border-slate-700"></div>
+
+            <!-- Gia đình -->
+            <div>
+                <h2 class="text-lg font-bold text-cyan-300 mb-3">Gia đình & thú cưng</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Mẹ</label>
+                        <input id="familyMom" type="text" placeholder="vd: Mẹ Hoa" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Bố</label>
+                        <input id="familyDad" type="text" placeholder="vd: Bố Minh" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-300 mb-1">Thú cưng</label>
+                        <input id="familyPet" type="text" placeholder="vd: Mèo Miu" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="border-t border-slate-700"></div>
+
+            <!-- Tính cách -->
+            <div>
+                <h2 class="text-lg font-bold text-cyan-300 mb-3">Tính cách & phong cách giao tiếp</h2>
+                <textarea id="personality" rows="4" placeholder="vd: Bé hơi nhút nhát, cần động viên nhiều, thích được khen cụ thể. Hay tò mò về động vật." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm"></textarea>
+                <p class="text-xs text-slate-500 mt-1">Mô tả để Robo điều chỉnh giọng điệu và cách động viên cho phù hợp với bé.</p>
+            </div>
+
+            <!-- Nút & trạng thái -->
+            <div class="flex flex-col gap-3 pt-2">
+                <button id="saveBtn" class="w-full py-3 rounded-xl bg-cyan-500 hover:bg-cyan-600 font-bold text-white transition shadow-lg shadow-cyan-500/30">
+                    Lưu hồ sơ
+                </button>
+                <div id="resultBox" class="hidden text-sm rounded-lg px-4 py-3 border"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadProfile() {
+            const childId = document.getElementById('childId').value.trim();
+            const adminKey = document.getElementById('adminKey').value.trim();
+            if (!childId || !adminKey) return;
+
+            try {
+                const resp = await fetch(`/api/child/profile?child_id=${encodeURIComponent(childId)}`, {
+                    headers: { 'X-Admin-Key': adminKey }
+                });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                fillForm(data);
+            } catch (e) {
+                console.warn('Không thể tải hồ sơ hiện tại:', e);
+            }
+        }
+
+        function fillForm(p) {
+            document.getElementById('name').value = p.name || '';
+            document.getElementById('nickname').value = p.nickname || '';
+            document.getElementById('age').value = p.age || '';
+            document.getElementById('grade').value = p.grade || '';
+            document.getElementById('learningLevel').value = p.learning_level || 'Starters';
+            document.getElementById('favoriteColor').value = p.favorite_color || '';
+            document.getElementById('favoriteAnimal').value = p.favorite_animal || '';
+            document.getElementById('favoriteFood').value = p.favorite_food || '';
+            document.getElementById('favoriteCharacter').value = p.favorite_character || '';
+            document.getElementById('hobbies').value = (p.hobbies || []).join(', ');
+            document.getElementById('personality').value = p.personality || '';
+
+            const fam = p.family_info || {};
+            document.getElementById('familyMom').value = fam.mom || '';
+            document.getElementById('familyDad').value = fam.dad || '';
+            document.getElementById('familyPet').value = fam.pet || '';
+        }
+
+        function showResult(ok, message) {
+            const box = document.getElementById('resultBox');
+            box.classList.remove('hidden');
+            box.textContent = message;
+            if (ok) {
+                box.className = 'text-sm rounded-lg px-4 py-3 border bg-emerald-950/60 text-emerald-300 border-emerald-700';
+            } else {
+                box.className = 'text-sm rounded-lg px-4 py-3 border bg-rose-950/60 text-rose-300 border-rose-700';
+            }
+        }
+
+        document.getElementById('childId').addEventListener('blur', loadProfile);
+        document.getElementById('adminKey').addEventListener('blur', loadProfile);
+
+        document.getElementById('saveBtn').addEventListener('click', async () => {
+            const childId = document.getElementById('childId').value.trim();
+            const adminKey = document.getElementById('adminKey').value.trim();
+            if (!childId) {
+                showResult(false, 'Vui lòng nhập Mã bé (child_id).');
+                return;
+            }
+            if (!adminKey) {
+                showResult(false, 'Vui lòng nhập Khóa quản trị (ADMIN_API_KEY).');
+                return;
+            }
+
+            const hobbies = document.getElementById('hobbies').value
+                .split(',')
+                .map(s => s.trim())
+                .filter(Boolean);
+
+            const familyInfo = {};
+            const mom = document.getElementById('familyMom').value.trim();
+            const dad = document.getElementById('familyDad').value.trim();
+            const pet = document.getElementById('familyPet').value.trim();
+            if (mom) familyInfo.mom = mom;
+            if (dad) familyInfo.dad = dad;
+            if (pet) familyInfo.pet = pet;
+
+            const ageRaw = document.getElementById('age').value.trim();
+            const payload = {
+                name: document.getElementById('name').value.trim() || undefined,
+                nickname: document.getElementById('nickname').value.trim() || undefined,
+                age: ageRaw ? Number(ageRaw) : undefined,
+                grade: document.getElementById('grade').value.trim() || undefined,
+                learning_level: document.getElementById('learningLevel').value || 'Starters',
+                favorite_color: document.getElementById('favoriteColor').value.trim() || undefined,
+                favorite_animal: document.getElementById('favoriteAnimal').value.trim() || undefined,
+                favorite_food: document.getElementById('favoriteFood').value.trim() || undefined,
+                favorite_character: document.getElementById('favoriteCharacter').value.trim() || undefined,
+                personality: document.getElementById('personality').value.trim() || undefined,
+                hobbies: hobbies,
+                family_info: familyInfo,
+            };
+
+            try {
+                const resp = await fetch(`/api/child/profile?child_id=${encodeURIComponent(childId)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Key': adminKey,
+                    },
+                    body: JSON.stringify(payload),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showResult(true, `Đã lưu hồ sơ cho "${childId}". Robo giờ sẽ hiểu tên, tuổi, sở thích và tính cách của bé.`);
+                } else {
+                    showResult(false, 'Lỗi: ' + (data.detail || 'Không thể lưu hồ sơ.'));
+                }
+            } catch (e) {
+                showResult(false, 'Lỗi kết nối: ' + e.message);
+            }
+        });
+    </script>
+</body>
+</html>
