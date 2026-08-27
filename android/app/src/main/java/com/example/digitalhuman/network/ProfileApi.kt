@@ -1,6 +1,7 @@
 package com.example.digitalhuman.network
 
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -20,8 +21,15 @@ class ProfileApi(serverUrl: String) {
         private const val TAG = "ProfileApi"
     }
 
-    private val baseUrl: String =
-        serverUrl.replaceFirst("ws://", "http://").replaceFirst("wss://", "https://")
+    // serverUrl có dạng ws://host:8000/ws/live — chỉ lấy origin (scheme://host:port),
+    // bỏ phần path, vì REST endpoint nằm ở gốc (vd: /api/child/setup).
+    private val baseUrl: String = run {
+        val httpUrl = serverUrl
+            .replaceFirst("ws://", "http://")
+            .replaceFirst("wss://", "https://")
+        val parsed = httpUrl.toHttpUrl()
+        "${parsed.scheme}://${parsed.host}:${parsed.port}"
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)

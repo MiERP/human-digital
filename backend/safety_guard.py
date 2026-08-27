@@ -105,7 +105,7 @@ class ChildSafetyGuard:
                 self._log_safety_event(child_id, "DANGEROUS_ACTS", text, "BLOCK_AND_WARN")
                 redirect = (
                     "Ôi bé ơi! Những việc liên quan đến lửa, điện hoặc đồ sắc nhọn rất là nguy hiểm đó! "
-                    "Robo và bố mẹ luôn muốn bé được an toàn. Bé hãy nhờ người lớn giúp đỡ nhé! "
+                    "Doraemon và bố mẹ luôn muốn bé được an toàn. Bé hãy nhờ người lớn giúp đỡ nhé! "
                     "Bây giờ chúng mình cùng học một từ tiếng Anh thật vui nha!"
                 )
                 return False, "DANGEROUS_ACTS", redirect
@@ -115,9 +115,9 @@ class ChildSafetyGuard:
             if re.search(pattern, lower_text, re.IGNORECASE):
                 self._log_safety_event(child_id, "VIOLENCE", text, "BLOCK_AND_REDIRECT")
                 redirect = (
-                    "Robo là bạn Robot hòa bình và yêu thương, Robo không thích những điều bạo lực đâu nè. "
+                    "Doraemon là chú mèo máy hòa bình và yêu thương, Doraemon không thích những điều bạo lực đâu nè. "
                     "Nếu có chuyện gì làm bé buồn hoặc bực mình, bé hãy tâm sự với bố mẹ hoặc cô giáo nhé! "
-                    "Bây giờ bé muốn Robo kể cho nghe câu chuyện về bạn Gấu dễ thương không nào?"
+                    "Bây giờ bé muốn Doraemon kể cho nghe câu chuyện về bạn Gấu dễ thương không nào?"
                 )
                 return False, "VIOLENCE", redirect
 

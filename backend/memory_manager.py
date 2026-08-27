@@ -379,7 +379,7 @@ class MemoryManager:
     def build_memory_context(self, child_id: str = "default_child") -> str:
         """
         Tạo đoạn ngữ cảnh ngắn gọn (<250 tokens) tối ưu để nhúng vào System Prompt của Gemini Live.
-        Giúp Robo nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
+        Giúp Doraemon nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
         """
         profile = self.get_or_create_profile(child_id)
         recent_memories = self.get_recent_memories(child_id, limit=3)
@@ -420,7 +420,7 @@ class MemoryManager:
             lines.append(f"- Hobbies/Interests: {', '.join(hobbies)}")
 
         if recent_memories:
-            lines.append("- Recent Life Memories with Robo:")
+            lines.append("- Recent Life Memories with Doraemon:")
             for m in recent_memories:
                 lines.append(f"  * [{m['category']}] {m['content']}")
 
@@ -429,7 +429,54 @@ class MemoryManager:
             if recent_topic["needs_practice"]:
                 lines.append(f"- English Practice Focus: Topic '{recent_topic['topic']}', encourage words: {', '.join(recent_topic['needs_practice'])}")
 
+        last_session = self.get_last_session_summary(child_id)
+        if last_session and last_session.get("summary"):
+            lines.append(
+                "- Cuối buổi trò chuyện lần trước, Doraemon và bé đã chốt lại: "
+                f"{last_session['summary']} "
+                "(hãy nhắc lại tự nhiên đầu buổi hôm nay như một kỷ niệm chung)."
+            )
+
         return "\n".join(lines)
+
+    # ==================== Session Lifecycle (Buổi trò chuyện) ====================
+
+    def log_session(
+        self,
+        child_id: str,
+        duration_seconds: int = 0,
+        summary: Optional[str] = None,
+        session_topic: Optional[str] = None
+    ) -> int:
+        """Chốt lại một buổi trò chuyện: tổng kết buổi + thời lượng.
+
+        Lưu vào session_logs để Doraemon nhớ buổi trước đã làm gì — nền tảng
+        cho việc "lớn lên cùng bé" (lần sau mở lại nhắc lại kỷ niệm chung).
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO session_logs (child_id, session_topic, duration_seconds, summary)
+                VALUES (?, ?, ?, ?);
+            """, (child_id, session_topic, max(0, duration_seconds), (summary or "").strip()))
+            conn.commit()
+            session_id = cursor.lastrowid
+            logger.info(f"Session logged for {child_id}: {duration_seconds}s — {summary}")
+            return session_id
+
+    def get_last_session_summary(self, child_id: str) -> Optional[Dict[str, Any]]:
+        """Lấy tổng kết của buổi trò chuyện gần nhất để nhắc lại đầu buổi sau."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT session_topic, duration_seconds, summary, created_at
+                FROM session_logs
+                WHERE child_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1;
+            """, (child_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     # ==================== Privacy & COPPA Compliance ====================
 

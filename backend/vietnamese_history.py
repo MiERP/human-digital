@@ -225,7 +225,7 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
             q_normalized = _strip_vietnamese_diacritics(q_lower)
             figure_normalized = _strip_vietnamese_diacritics(figure_l)
             if figure_normalized in q_normalized or figure_l in q_lower:
-                return (entry, key, f"Robo Knowledge Base: {figure}")
+                return (entry, key, f"Doraemon Knowledge Base: {figure}")
 
     # Match các alias phổ biến
     history_aliases = {
@@ -253,12 +253,12 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
         if alias in q_lower or _strip_vietnamese_diacritics(alias) in _strip_vietnamese_diacritics(q_lower):
             if key in CURATED_HISTORY:
                 entry = CURATED_HISTORY[key]
-                return (entry, key, f"Robo Knowledge Base: {alias.title()}")
+                return (entry, key, f"Doraemon Knowledge Base: {alias.title()}")
 
     # Check science keys
     for key, entry in CURATED_SCIENCE.items():
         if key.replace("_", " ") in q_lower:
-            return (entry, key, f"Robo Knowledge Base: {key.replace('_', ' ').title()}")
+            return (entry, key, f"Doraemon Knowledge Base: {key.replace('_', ' ').title()}")
 
     # Science aliases
     science_aliases = {
@@ -275,7 +275,7 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
         if alias in q_lower or _strip_vietnamese_diacritics(alias) in _strip_vietnamese_diacritics(q_lower):
             if key in CURATED_SCIENCE:
                 entry = CURATED_SCIENCE[key]
-                return (entry, key, f"Robo Knowledge Base: {alias.title()}")
+                return (entry, key, f"Doraemon Knowledge Base: {alias.title()}")
 
     return None
 

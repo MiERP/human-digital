@@ -151,7 +151,7 @@ class TestChildMemoryAndSafety(unittest.TestCase):
         profile = self.memory.get_or_create_profile(child_id)
         self.assertEqual(profile["gender"], "female")
 
-        # Context phải chứa giới tính để Robo xưng hô đúng
+        # Context phải chứa giới tính để Doraemon xưng hô đúng
         context = self.memory.build_memory_context(child_id)
         self.assertIn("girl", context)
         self.assertIn("hoạt bát", context)

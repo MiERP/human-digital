@@ -1,8 +1,10 @@
 package com.example.digitalhuman.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,8 +29,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,7 +49,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -58,9 +57,13 @@ import com.example.digitalhuman.audio.AudioRecorder
 import com.example.digitalhuman.network.ConnectionState
 import com.example.digitalhuman.network.GeminiLiveClient
 import com.example.digitalhuman.network.ProfileApi
+import com.example.digitalhuman.network.RobotEmotion
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
@@ -70,11 +73,25 @@ class MainActivity : ComponentActivity() {
         private const val BACKEND_WS_URL = "ws://192.168.100.194:8000/ws/live"
 
         // Mỗi bé có hồ sơ cá nhân hóa riêng (memory, tiến độ, search cache tách biệt).
-        // Đổi giá trị này theo từng bé, hoặc thay bằng màn hình cấu hình ban đầu.
-        private const val CHILD_ID = "default_child"
+        // child_id được sinh ngẫu nhiên 1 lần trên mỗi máy (xem resolveChildId),
+        // nên 2 điện thoại = 2 bé = 2 bộ dữ liệu riêng trên cùng 1 server.
 
         private const val PREFS_NAME = "robo_setup_prefs"
         private const val KEY_SETUP_DONE = "setup_done"
+        private const val KEY_CHILD_ID = "child_id"
+    }
+
+    /**
+     * child_id riêng cho từng máy: sinh UUID 1 lần khi cài app, lưu vào
+     * SharedPreferences để các lần mở sau vẫn dùng đúng ID (giữ memory của bé).
+     * Cài lại app (xóa dữ liệu) sẽ sinh ID mới.
+     */
+    private fun resolveChildId(prefs: android.content.SharedPreferences): String {
+        val existing = prefs.getString(KEY_CHILD_ID, null)
+        if (!existing.isNullOrBlank()) return existing
+        val fresh = UUID.randomUUID().toString()
+        prefs.edit().putString(KEY_CHILD_ID, fresh).apply()
+        return fresh
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,6 +99,7 @@ class MainActivity : ComponentActivity() {
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val localSetupDone = prefs.getBoolean(KEY_SETUP_DONE, false)
+        val childId = resolveChildId(prefs)
 
         setContent {
             MaterialTheme {
@@ -91,7 +109,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     AppRoot(
                         serverUrl = BACKEND_WS_URL,
-                        childId = CHILD_ID,
+                        childId = childId,
                         localSetupDone = localSetupDone,
                         onSetupDone = { prefs.edit().putBoolean(KEY_SETUP_DONE, true).apply() },
                         onSetupReset = { prefs.edit().putBoolean(KEY_SETUP_DONE, false).apply() },
@@ -198,10 +216,20 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // Doraemon ngủ 120s chờ wake word; hết giờ không ai gọi → thoát app hoàn toàn.
+    val SLEEP_TIMEOUT_MS = 120_000L
+    val TAG = "TutorScreen"
+
     var connectionState by remember { mutableStateOf(ConnectionState.DISCONNECTED) }
     var robotAmplitude by remember { mutableFloatStateOf(0f) }
     var userVolume by remember { mutableFloatStateOf(0f) }
     var isSessionActive by remember { mutableStateOf(false) }
+
+    // Đồng hồ ngủ: sau session_ended, đếm 120s chờ wake word rồi thoát app.
+    var sleepJob by remember { mutableStateOf<Job?>(null) }
+
+    // Trạng thái cảm xúc + năng lượng của Doraemon (do backend EmotionEngine đẩy về).
+    var robotEmotion by remember { mutableStateOf(RobotEmotion()) }
 
     // Encyclopedia Mode: state cho chip bar hỏi chủ đề
     var clarificationRequest by remember { mutableStateOf<ClarificationRequest?>(null) }
@@ -237,15 +265,33 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
                 audioPlayer.enqueueAudio(audioBytes)
             },
             onStateChanged = { newState ->
-                if (newState == ConnectionState.CONNECTED) {
-                    connectionState = ConnectionState.LISTENING
-                } else if (newState == ConnectionState.DISCONNECTED || newState == ConnectionState.ERROR) {
-                    connectionState = newState
+                when (newState) {
+                    ConnectionState.CONNECTED -> connectionState = ConnectionState.LISTENING
+                    ConnectionState.SLEEPING -> connectionState = ConnectionState.SLEEPING
+                    ConnectionState.DISCONNECTED, ConnectionState.ERROR -> connectionState = newState
+                    else -> Unit
                 }
             },
             onInterrupted = {
                 audioPlayer.stopAndFlush()
                 connectionState = ConnectionState.LISTENING
+            },
+            onEmotionChanged = { emotion ->
+                robotEmotion = emotion
+            },
+            onSessionEnded = {
+                // Doraemon đã chào tạm biệt xong: tắt mic + loa, avatar chuyển "ngủ".
+                // Giữ màn "ngủ" 120s — bé muốn nói tiếp thì bấm nút "Đánh thức Doraemon";
+                // hết giờ không bấm → app tự thoát hoàn toàn (như bấm Dừng trò chuyện).
+                audioRecorderRef?.stopRecording()
+                audioPlayer.stopAndFlush()
+                isSessionActive = false
+                sleepJob?.cancel()
+                sleepJob = scope.launch {
+                    delay(SLEEP_TIMEOUT_MS)
+                    Log.i(TAG, "Doraemon slept ${SLEEP_TIMEOUT_MS}ms — exiting app.")
+                    (context as? Activity)?.finishAndRemoveTask()
+                }
             },
             onClarificationRequest = { question, options ->
                 // Hiển thị chip bar trên UI để bé chọn chủ đề.
@@ -270,8 +316,12 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
             onSpeechStarted = {
                 // Client-side VAD: báo cho Gemini biết user bắt đầu nói.
                 // Phải gửi TRƯỚC khi audio chunks của utterance này được stream lên.
+                // Khi Doraemon đang ngủ: vẫn gửi audio lên (tai mở) nhưng không đổi UI —
+                // chỉ backend quyết định có phải wake word không (event woke_up).
                 client.notifyActivityStart()
-                if (connectionState != ConnectionState.SPEAKING) {
+                if (connectionState != ConnectionState.SPEAKING &&
+                    connectionState != ConnectionState.SLEEPING
+                ) {
                     connectionState = ConnectionState.LISTENING
                 }
             },
@@ -279,7 +329,9 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
                 // Client-side VAD: báo cho Gemini biết user đã nói xong,
                 // Gemini sẽ finalize turn và generate response.
                 client.notifyActivityEnd()
-                if (connectionState != ConnectionState.SPEAKING) {
+                if (connectionState != ConnectionState.SPEAKING &&
+                    connectionState != ConnectionState.SLEEPING
+                ) {
                     connectionState = ConnectionState.THINKING
                 }
             }
@@ -296,12 +348,13 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
             client.connect()
             audioRecorder.startRecording(scope)
         } else {
-            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với bạn Robo!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với Doraemon!", Toast.LENGTH_SHORT).show()
         }
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            sleepJob?.cancel()
             audioRecorder.stopRecording()
             audioPlayer.release()
             client.disconnect()
@@ -327,9 +380,9 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
                 horizontalArrangement = Arrangement.Center
             ) {
                 Text(
-                    text = "ROBO ENGLISH BUDDY",
+                    text = "DORAEMON",
                     color = Color.White,
-                    fontSize = 22.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 2.sp
                 )
@@ -368,26 +421,25 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
             )
         }
 
-        // 2. Avatar Robot 2D ở trung tâm
+        // 2. Avatar Doraemon 2D ở trung tâm
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
             contentAlignment = Alignment.Center
         ) {
-            RobotAvatar(
+            DoraemonAvatar(
                 state = connectionState,
-                amplitude = robotAmplitude
+                amplitude = robotAmplitude,
+                emotion = robotEmotion,
             )
         }
 
-        // 3. Khung hướng dẫn & Nút tương tác
+        // 3. Nút tương tác
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            InstructionCard(state = connectionState)
-
             // Chip bar cho Encyclopedia Mode (chỉ hiện khi có clarification request)
             clarificationRequest?.let { req ->
                 Spacer(modifier = Modifier.height(12.dp))
@@ -403,10 +455,17 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Nút Bắt đầu / Kết thúc buổi học
+            // Nút Bắt đầu / Đánh thức Doraemon / Kết thúc buổi học
             Button(
                 onClick = {
-                    if (!isSessionActive) {
+                    if (connectionState == ConnectionState.SLEEPING) {
+                        // Doraemon đang ngủ — đánh thức để trò chuyện tiếp.
+                        client.wakeUp()
+                        isSessionActive = true
+                        audioPlayer.start(scope)
+                        client.connect()
+                        audioRecorder.startRecording(scope)
+                    } else if (!isSessionActive) {
                         val hasPermission = ContextCompat.checkSelfPermission(
                             context,
                             Manifest.permission.RECORD_AUDIO
@@ -436,7 +495,11 @@ fun TutorScreen(serverUrl: String, childId: String, onResetSetup: () -> Unit = {
                 )
             ) {
                 Text(
-                    text = if (isSessionActive) "Dừng trò chuyện" else "Bắt đầu nói chuyện với Robo",
+                    text = when {
+                        connectionState == ConnectionState.SLEEPING -> "Đánh thức Doraemon"
+                        isSessionActive -> "DỪNG"
+                        else -> "BẮT ĐẦU"
+                    },
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
@@ -453,9 +516,10 @@ fun StatusPill(state: ConnectionState) {
         ConnectionState.DISCONNECTED -> Triple(Color(0xFF475569), Color.White, "Chưa kết nối")
         ConnectionState.CONNECTING -> Triple(Color(0xFFF59E0B), Color.Black, "Đang kết nối...")
         ConnectionState.CONNECTED -> Triple(Color(0xFF10B981), Color.White, "Đã sẵn sàng")
-        ConnectionState.LISTENING -> Triple(Color(0xFF06B6D4), Color.Black, "Đang lắng nghe bé nói...")
-        ConnectionState.THINKING -> Triple(Color(0xFF8B5CF6), Color.White, "Robo đang suy nghĩ...")
-        ConnectionState.SPEAKING -> Triple(Color(0xFF10B981), Color.White, "Robo đang nói chuyện")
+        ConnectionState.LISTENING -> Triple(Color(0xFF06B6D4), Color.Black, "Doraemon đang lắng nghe...")
+        ConnectionState.THINKING -> Triple(Color(0xFF8B5CF6), Color.White, "Doraemon đang suy nghĩ...")
+        ConnectionState.SPEAKING -> Triple(Color(0xFF10B981), Color.White, "Doraemon đang nói chuyện")
+        ConnectionState.SLEEPING -> Triple(Color(0xFF6366F1), Color.White, "Doraemon đang ngủ...")
         ConnectionState.ERROR -> Triple(Color(0xFFEF4444), Color.White, "Lỗi kết nối")
     }
 
@@ -478,33 +542,6 @@ fun StatusPill(state: ConnectionState) {
             color = textColor,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-
-@Composable
-fun InstructionCard(state: ConnectionState) {
-    val hint = when (state) {
-        ConnectionState.DISCONNECTED -> "Nhấn nút màu xanh bên dưới để bắt đầu luyện nói tiếng Anh nhé!"
-        ConnectionState.LISTENING -> "Bé hãy nói tiếng Anh hoặc tiếng Việt bất kỳ, Robo luôn lắng nghe!"
-        ConnectionState.SPEAKING -> "Robo đang trả lời, bé có thể nói chen ngang bất cứ lúc nào."
-        ConnectionState.THINKING -> "Chờ Robo một chút xíu nhé..."
-        else -> "Hãy cùng nhau học những từ vựng thật vui nào!"
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B).copy(alpha = 0.85f))
-    ) {
-        Text(
-            text = hint,
-            color = Color(0xFFE2E8F0),
-            fontSize = 14.sp,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
         )
     }
 }

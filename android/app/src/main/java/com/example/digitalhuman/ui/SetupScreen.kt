@@ -47,7 +47,7 @@ import androidx.compose.ui.unit.sp
 
 /**
  * Màn hình cấu hình hồ sơ bé — chỉ hiện 1 lần khi bắt đầu sử dụng app
- * hoặc sau khi reset cấu hình. Dữ liệu này là nguồn cá nhân hóa cho Robo.
+ * hoặc sau khi reset cấu hình. Dữ liệu này là nguồn cá nhân hóa cho Doraemon.
  *
  * - Tên: textbox
  * - Tuổi & giới tính: dropdown
@@ -89,7 +89,7 @@ fun SetupScreen(
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Robo muốn làm quen với bé. Bố mẹ hãy điền giúp bé nhé!",
+            text = "Doraemon muốn làm quen với bé. Bố mẹ hãy điền giúp bé nhé!",
             color = Color(0xFFE2E8F0),
             fontSize = 14.sp,
             textAlign = TextAlign.Center
@@ -179,7 +179,7 @@ fun SetupScreen(
             )
         ) {
             Text(
-                text = if (isSubmitting) "Đang lưu..." else "Bắt đầu trò chuyện với Robo",
+                text = if (isSubmitting) "Đang lưu..." else "Bắt đầu trò chuyện với Doraemon",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White

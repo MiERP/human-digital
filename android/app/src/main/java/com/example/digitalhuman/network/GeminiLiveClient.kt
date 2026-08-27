@@ -21,8 +21,17 @@ enum class ConnectionState {
     LISTENING,
     THINKING,
     SPEAKING,
+    SLEEPING,   // Robo đã chào tạm biệt và "đi ngủ" — phiên đã kết thúc êm đềm
     ERROR
 }
+
+/** Trạng thái cảm xúc + năng lượng của Robo do backend (EmotionEngine) gửi về. */
+data class RobotEmotion(
+    val emotion: String = "neutral",   // happy, surprised, strict, displeased, sad, neutral
+    val energy: String = "neutral",    // energetic, excited, sleepy, drowsy, tired, neutral
+    val intensity: Double = 0.5,       // 0.0 -> 1.0
+    val fatigue: Double = 0.0,         // 0.0 -> 1.0
+)
 
 class GeminiLiveClient(
     private val serverUrl: String,
@@ -30,6 +39,8 @@ class GeminiLiveClient(
     private val onAudioReceived: (ByteArray) -> Unit,
     private val onStateChanged: (ConnectionState) -> Unit,
     private val onInterrupted: () -> Unit,
+    private val onEmotionChanged: ((RobotEmotion) -> Unit)? = null,
+    private val onSessionEnded: (() -> Unit)? = null,
     private val onClarificationRequest: ((question: String, options: List<String>) -> Unit)? = null
 ) {
     companion object {
@@ -98,6 +109,19 @@ class GeminiLiveClient(
                     val json = JSONObject(text)
                     if (json.has("event")) {
                         when (json.getString("event")) {
+                            "emotion_update" -> {
+                                // Backend đẩy trạng thái cảm xúc/năng lượng mới.
+                                parseEmotion(json.optJSONObject("emotion"))
+                            }
+                            "session_ended" -> {
+                                // Robo đã chào tạm biệt xong — avatar chuyển "ngủ".
+                                // Backend đóng WebSocket; app giữ màn ngủ 120s để bé
+                                // bấm nút đánh thức, hết giờ thì tự thoát.
+                                Log.d(TAG, "session_ended received. Robo is going to sleep.")
+                                shouldReconnect = false
+                                updateState(ConnectionState.SLEEPING)
+                                onSessionEnded?.invoke()
+                            }
                             "turn_complete" -> {
                                 Log.d(TAG, "Gemini turn_complete received.")
                                 updateState(ConnectionState.LISTENING)
@@ -135,6 +159,8 @@ class GeminiLiveClient(
                         }
                     } else if (json.has("status") && json.getString("status") == "ready") {
                         updateState(ConnectionState.LISTENING)
+                        // Trạng thái cảm xúc khởi đầu gửi kèm trong gói "ready".
+                        parseEmotion(json.optJSONObject("emotion"))
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing server message: $text", e)
@@ -142,6 +168,12 @@ class GeminiLiveClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                // Backend đóng WebSocket (code 1000) sau khi session kết thúc êm đềm:
+                // không phải lỗi — giữ nguyên trạng thái "Robo đang ngủ".
+                if (currentState == ConnectionState.SLEEPING) {
+                    Log.d(TAG, "WebSocket closed after session end (ignored as failure).")
+                    return
+                }
                 Log.e(TAG, "WebSocket connection failed: ${t.message}", t)
                 updateState(ConnectionState.ERROR)
                 scheduleReconnect()
@@ -149,8 +181,10 @@ class GeminiLiveClient(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "WebSocket closed: $reason")
-                updateState(ConnectionState.DISCONNECTED)
-                if (code != 1000) {
+                if (currentState != ConnectionState.SLEEPING) {
+                    updateState(ConnectionState.DISCONNECTED)
+                }
+                if (code != 1000 && currentState != ConnectionState.SLEEPING) {
                     scheduleReconnect()
                 }
             }
@@ -246,8 +280,30 @@ class GeminiLiveClient(
         updateState(ConnectionState.DISCONNECTED)
     }
 
+    /** Robo đang "ngủ" — trạng thái nghỉ sau khi kết thúc buổi trò chuyện êm đềm. */
+    fun wakeUp() {
+        shouldReconnect = false
+        updateState(ConnectionState.DISCONNECTED)
+    }
+
     private fun updateState(newState: ConnectionState) {
         currentState = newState
         onStateChanged(newState)
+    }
+
+    private fun parseEmotion(json: org.json.JSONObject?) {
+        if (json == null) return
+        try {
+            val emotion = RobotEmotion(
+                emotion = json.optString("emotion", "neutral"),
+                energy = json.optString("energy", "neutral"),
+                intensity = json.optDouble("intensity", 0.5),
+                fatigue = json.optDouble("fatigue", 0.0),
+            )
+            Log.d(TAG, "Emotion state: ${emotion.emotion} / ${emotion.energy} (fatigue=${emotion.fatigue})")
+            onEmotionChanged?.invoke(emotion)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse emotion state: ${e.message}")
+        }
     }
 }

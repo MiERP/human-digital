@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cấu hình cá nhân hóa Robo cho bé</title>
+    <title>Cấu hình cá nhân hóa Doraemon cho bé</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
     <div class="max-w-2xl mx-auto">
         <header class="text-center mb-8">
-            <h1 class="text-2xl md:text-3xl font-black tracking-wide text-cyan-400">🤖 Cấu hình Robo cho bé</h1>
+            <h1 class="text-2xl md:text-3xl font-black tracking-wide text-cyan-400">🤖 Cấu hình Doraemon cho bé</h1>
             <p class="text-slate-400 text-sm mt-2">
-                Phụ huynh điền hồ sơ để Robo hiểu tên, tuổi, sở thích và tính cách của bé.
+                Phụ huynh điền hồ sơ để Doraemon hiểu tên, tuổi, sở thích và tính cách của bé.
                 Mỗi bé dùng một <span class="text-cyan-300 font-semibold">Mã bé (child_id)</span> riêng.
             </p>
         </header>
@@ -119,7 +119,7 @@
             <div>
                 <h2 class="text-lg font-bold text-cyan-300 mb-3">Tính cách & phong cách giao tiếp</h2>
                 <textarea id="personality" rows="4" placeholder="vd: Bé hơi nhút nhát, cần động viên nhiều, thích được khen cụ thể. Hay tò mò về động vật." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm"></textarea>
-                <p class="text-xs text-slate-500 mt-1">Mô tả để Robo điều chỉnh giọng điệu và cách động viên cho phù hợp với bé.</p>
+                <p class="text-xs text-slate-500 mt-1">Mô tả để Doraemon điều chỉnh giọng điệu và cách động viên cho phù hợp với bé.</p>
             </div>
 
             <!-- Nút & trạng thái -->
@@ -235,7 +235,7 @@
                 });
                 const data = await resp.json();
                 if (resp.ok) {
-                    showResult(true, `Đã lưu hồ sơ cho "${childId}". Robo giờ sẽ hiểu tên, tuổi, sở thích và tính cách của bé.`);
+                    showResult(true, `Đã lưu hồ sơ cho "${childId}". Doraemon giờ sẽ hiểu tên, tuổi, sở thích và tính cách của bé.`);
                 } else {
                     showResult(false, 'Lỗi: ' + (data.detail || 'Không thể lưu hồ sơ.'));
                 }

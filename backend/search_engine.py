@@ -67,7 +67,7 @@ class _TTLCache:
 
 class KnowledgeSearchEngine:
     """
-    Unified search interface for Robo's Encyclopedia Mode.
+    Unified search interface for Doraemon's Encyclopedia Mode.
 
     Output contract (always):
         {
@@ -109,7 +109,7 @@ class KnowledgeSearchEngine:
     def _cache_key(self, query: str, topic_hint: Optional[str], child_id: str = "default_child") -> str:
         """Cache key includes topic_hint + child_id so identical queries never
         collide across different hints or different children. This keeps child
-        data isolated (each child has their own Robo memory)."""
+        data isolated (each child has their own Doraemon memory)."""
         norm = self._normalize_query(query)
         hint = (topic_hint or "").strip().lower()
         child = child_id.strip().lower() or "default_child"
@@ -289,7 +289,7 @@ class KnowledgeSearchEngine:
                 "source_backend": backend_used,
                 "is_blocked": False,
                 "safe_message": (
-                    f"Robo không tìm thấy thông tin về '{query}'. "
+                    f"Doraemon không tìm thấy thông tin về '{query}'. "
                     "Bạn thử hỏi cách khác xem sao?"
                 ),
                 "query": query,
@@ -329,7 +329,7 @@ class KnowledgeSearchEngine:
         }
         url = f"{self.CSE_ENDPOINT}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(
-            url, headers={"User-Agent": "RoboEnglishBuddy/1.0 (educational)"}
+            url, headers={"User-Agent": "DoraemonEnglishBuddy/1.0 (educational)"}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -363,7 +363,7 @@ class KnowledgeSearchEngine:
         )
         req = urllib.request.Request(
             search_url,
-            headers={"User-Agent": "RoboEnglishBuddy/1.0 (educational)"},
+            headers={"User-Agent": "DoraemonEnglishBuddy/1.0 (educational)"},
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -396,7 +396,7 @@ class KnowledgeSearchEngine:
             url = self.WIKI_SUMMARY_URL.format(title=urllib.parse.quote(title))
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "RoboEnglishBuddy/1.0 (educational)"},
+                headers={"User-Agent": "DoraemonEnglishBuddy/1.0 (educational)"},
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
