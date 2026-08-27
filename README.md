@@ -1,15 +1,15 @@
 # 🤖 Digital Human AI Tutor for Kids (Android + Gemini Live)
 
-Dự án trợ lý ảo Digital Human 2D Robot cho trẻ em từ 5–12 tuổi. Tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp (không cần LiveKit hay dịch vụ trung gian đắt tiền).
+Dự án trợ lý ảo Digital Human 2D Doraemon cho trẻ em từ 5–12 tuổi. Tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp (không cần LiveKit hay dịch vụ trung gian đắt tiền).
 
 ## 🎯 Hai chế độ hoạt động
 
 ### 1️⃣ Chế độ Bách khoa toàn thư (Encyclopedia Mode) — Knowledge
-Robo đóng vai một cuốn bách khoa toàn thư sinh động, trả lời các câu hỏi về **lịch sử, địa lý, khoa học tự nhiên, vũ trụ, thiên văn, động vật, nhân vật nổi tiếng…**
+Doraemon đóng vai một cuốn bách khoa toàn thư sinh động, trả lời các câu hỏi về **lịch sử, địa lý, khoa học tự nhiên, vũ trụ, thiên văn, động vật, nhân vật nổi tiếng…**
 
 Cơ chế hoạt động:
-- Khi bé hỏi "Hai Bà Trưng là ai?" nhưng **câu hỏi mơ hồ**, Robo sẽ tự động hỏi lại với 2–4 lựa chọn chủ đề hiển thị dưới dạng **chip bar** trên màn hình Android. Bé chỉ cần chạm vào chip phù hợp.
-- Khi chủ đề đã rõ (do bé nói rõ, hoặc sau khi hỏi lại), Robo gọi tool `search` để tìm **top 3 kết quả** đáng tin cậy nhất (Google Programmable Search Engine primary, fallback Wikipedia Simple English khi CSE không khả dụng).
+- Khi bé hỏi "Hai Bà Trưng là ai?" nhưng **câu hỏi mơ hồ**, Doraemon sẽ tự động hỏi lại với 2–4 lựa chọn chủ đề hiển thị dưới dạng **chip bar** trên màn hình Android. Bé chỉ cần chạm vào chip phù hợp.
+- Khi chủ đề đã rõ (do bé nói rõ, hoặc sau khi hỏi lại), Doraemon gọi tool `search` để tìm **top 3 kết quả** đáng tin cậy nhất (Google Programmable Search Engine primary, fallback Wikipedia Simple English khi CSE không khả dụng).
 - Gemini tổng hợp 3 kết quả thành một đoạn văn ngắn gọn **3–5 câu**, ngôn ngữ thân thiện với trẻ em, xen lẫn 1–2 từ tiếng Anh về chủ đề.
 - Mọi URL đều qua bộ lọc an toàn trẻ em `ChildSafetyGuard.assert_safe_url()` — chỉ whitelist mới được phép.
 - **Cache in-memory 1 giờ** giúp tiết kiệm quota Google CSE và giảm độ trễ trả lời cho câu hỏi lặp lại.
@@ -21,7 +21,7 @@ Giữ nguyên toàn bộ tính năng English Buddy nguyên bản:
 - Lưu hồ sơ bé (tên, sở thích, gia đình, thú cưng…)
 - Theo dõi tiến độ học tập (`learning_progress`)
 
-**Robo tự động nhận diệt chế độ** dựa trên nội dung câu hỏi — KHÔNG cần nhấn nút chuyển. Câu hỏi kiến thức → Encyclopedia. Trò chuyện / học tiếng Anh → English mode. Hai chế độ chuyển qua lại linh hoạt trong cùng 1 phiên.
+**Doraemon tự động nhận diện chế độ** dựa trên nội dung câu hỏi — KHÔNG cần nhấn nút chuyển. Câu hỏi kiến thức → Encyclopedia. Trò chuyện / học tiếng Anh → English mode. Hai chế độ chuyển qua lại linh hoạt trong cùng 1 phiên.
 
 ---
 
@@ -68,7 +68,7 @@ GOOGLE_CSE_KEY=your_api_key_here
 [Điện thoại Android (Kotlin/Compose)]
   │ • AudioRecord (16kHz PCM)
   │ • Silero VAD on-device (phát hiện nói/không nói)
-  │ • 2D Robot Canvas (Lip-sync real-time theo âm lượng)
+  │ • 2D Doraemon Canvas (Lip-sync real-time theo âm lượng)
   │ • AudioTrack (24kHz PCM playback)
   │
   │ ▲ WebSocket 2 chiều (WSS)
@@ -112,17 +112,17 @@ human-digital/
             ├── network/
             │   └── GeminiLiveClient.kt # OkHttp WebSocket Client (+ clarification events)
             └── ui/
-                ├── RobotAvatar.kt      # 2D Robot vẽ bằng Jetpack Compose
+                ├── DoraemonAvatar.kt   # Doraemon vẽ bằng Jetpack Compose
                 └── MainActivity.kt     # ⭐ UI chính + ClarificationChipBar (Encyclopedia chip)
 ```
 
 ## 🧒 Cá nhân hóa từng bé
 
-Mỗi bé là một hồ sơ riêng (tên, tuổi, sở thích, gia đình, **tính cách**). Robo dùng hồ sơ này để điều chỉnh giọng điệu và cách động viên cho đúng từng bé.
+Mỗi bé là một hồ sơ riêng (tên, tuổi, sở thích, gia đình, **tính cách**). Doraemon dùng hồ sơ này để điều chỉnh giọng điệu và cách động viên cho đúng từng bé.
 
 - Phụ huynh mở trang **`http://<backend>:8000/config`**, nhập `ADMIN_API_KEY` + `child_id`, điền hồ sơ và bấm **Lưu**.
 - Android app truyền `child_id` qua WebSocket URL (`ws://<backend>:8000/ws/live?child_id=...`) để gắn đúng hồ sơ.
-- Trường `personality` (tính cách / phong cách giao tiếp) được đưa vào system prompt để Robo "hiểu" bé.
+- Trường `personality` (tính cách / phong cách giao tiếp) được đưa vào system prompt để Doraemon "hiểu" bé.
 
 ## 🎤 Lưu ý VAD on-device
 
@@ -159,4 +159,4 @@ Android hiện dùng **Silero VAD on-device** (`com.github.gkonovalov.android-va
    * Nếu chạy trên **Android Emulator**: giữ nguyên `"ws://10.0.2.2:8000/ws/live"`.
    * Nếu chạy trên **điện thoại thật cắm cáp/Wifi**: đổi thành IP mạng nội bộ của máy tính, ví dụ `"ws://192.168.1.15:8000/ws/live"`.
 3. Bấm **Run** trên Android Studio để cài app lên điện thoại.
-4. Nhấn nút **"Bắt đầu nói chuyện với Robo"**, cấp quyền Micro và bắt đầu trò chuyện bằng tiếng Anh hoặc tiếng Việt!
+4. Nhấn nút **"BẮT ĐẦU"**, cấp quyền Micro và bắt đầu trò chuyện bằng tiếng Anh hoặc tiếng Việt!
