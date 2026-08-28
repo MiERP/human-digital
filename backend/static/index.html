@@ -25,46 +25,17 @@
         </div>
     </header>
 
-    <!-- Doraemon Avatar SVG -->
+    <!-- Doraemon Avatar 2D Anime -->
     <main class="my-auto flex flex-col items-center">
-        <div class="relative w-64 h-64 robot-float">
+        <div class="relative w-64 h-80 robot-float flex items-center justify-center">
             <!-- Glow background -->
-            <div id="glowRing" class="absolute inset-0 bg-cyan-500/20 rounded-full blur-xl transition-all duration-300"></div>
+            <div id="glowRing" class="absolute w-72 h-72 bg-cyan-500/20 rounded-full blur-2xl transition-all duration-300 pointer-events-none"></div>
 
-            <svg viewBox="0 0 200 200" class="w-full h-full relative z-10 drop-shadow-2xl">
-                <!-- Antenna -->
-                <line x1="100" y1="50" x2="100" y2="25" stroke="#94A3B8" stroke-width="4" stroke-linecap="round"/>
-                <circle id="antennaTip" cx="100" cy="20" r="8" fill="#06B6D4" class="transition-colors duration-300"/>
-                
-                <!-- Ears -->
-                <rect x="26" y="80" width="12" height="36" rx="6" fill="#3B82F6"/>
-                <rect x="162" y="80" width="12" height="36" rx="6" fill="#3B82F6"/>
-
-                <!-- Head Shell -->
-                <rect x="36" y="46" width="128" height="110" rx="32" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="3"/>
-
-                <!-- Face Screen -->
-                <rect x="52" y="62" width="96" height="74" rx="20" fill="#0F172A"/>
-
-                <!-- Blush -->
-                <circle cx="68" cy="116" r="6" fill="#FB7185" opacity="0.6"/>
-                <circle cx="132" cy="116" r="6" fill="#FB7185" opacity="0.6"/>
-
-                <!-- Left Eye -->
-                <g id="leftEye">
-                    <ellipse id="leftEyeRound" cx="78" cy="94" rx="9" ry="11" fill="#38BDF8"/>
-                    <path id="leftEyeHappy" d="M 69 96 Q 78 86 87 96" stroke="#38BDF8" stroke-width="3.5" fill="none" stroke-linecap="round" class="hidden"/>
-                </g>
-
-                <!-- Right Eye -->
-                <g id="rightEye">
-                    <ellipse id="rightEyeRound" cx="122" cy="94" rx="9" ry="11" fill="#38BDF8"/>
-                    <path id="rightEyeHappy" d="M 113 96 Q 122 86 131 96" stroke="#38BDF8" stroke-width="3.5" fill="none" stroke-linecap="round" class="hidden"/>
-                </g>
-
-                <!-- Mouth -->
-                <rect id="mouthRect" x="88" y="114" width="24" height="4" rx="2" fill="#38BDF8" class="transition-all duration-75"/>
-            </svg>
+            <!-- Authentic 2D Anime Doraemon Image -->
+            <img id="doraemonAvatarImg" 
+                 src="img/doraemon_idle.png" 
+                 alt="Doraemon AI" 
+                 class="w-full h-full object-contain drop-shadow-2xl relative z-10 transition-all duration-300">
         </div>
 
         <!-- Mic visualizer bar -->
@@ -118,13 +89,8 @@
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
         const hintCard = document.getElementById('hintCard');
-        const mouthRect = document.getElementById('mouthRect');
-        const antennaTip = document.getElementById('antennaTip');
         const glowRing = document.getElementById('glowRing');
-        const leftEyeRound = document.getElementById('leftEyeRound');
-        const leftEyeHappy = document.getElementById('leftEyeHappy');
-        const rightEyeRound = document.getElementById('rightEyeRound');
-        const rightEyeHappy = document.getElementById('rightEyeHappy');
+        const doraemonAvatarImg = document.getElementById('doraemonAvatarImg');
         const micVolumeBar = document.getElementById('micVolumeBar');
 
         function setStatus(state, text) {
@@ -132,60 +98,44 @@
             if (state === 'connected' || state === 'ready') {
                 statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
                 statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-emerald-950/80 text-emerald-300 border border-emerald-800';
-                antennaTip.setAttribute('fill', '#10B981');
-                glowRing.className = 'absolute inset-0 bg-emerald-500/20 rounded-full blur-xl';
-                setEyes('round');
+                glowRing.className = 'absolute w-72 h-72 bg-emerald-500/20 rounded-full blur-2xl transition-all duration-300 pointer-events-none';
+                doraemonAvatarImg.src = 'img/doraemon_idle.png';
             } else if (state === 'thinking') {
                 statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
                 statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-amber-950/80 text-amber-300 border border-amber-800';
-                antennaTip.setAttribute('fill', '#F59E0B');
-                glowRing.className = 'absolute inset-0 bg-amber-500/30 rounded-full blur-xl';
-                setEyes('round');
+                glowRing.className = 'absolute w-72 h-72 bg-amber-500/30 rounded-full blur-2xl transition-all duration-300 pointer-events-none';
+                doraemonAvatarImg.src = 'img/doraemon_thinking.png';
             } else if (state === 'speaking') {
                 statusDot.className = 'w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping';
                 statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-cyan-950/80 text-cyan-300 border border-cyan-800';
-                antennaTip.setAttribute('fill', '#06B6D4');
-                glowRing.className = 'absolute inset-0 bg-cyan-500/30 rounded-full blur-xl';
-                setEyes('happy');
+                glowRing.className = 'absolute w-72 h-72 bg-cyan-500/35 rounded-full blur-2xl transition-all duration-300 pointer-events-none';
+                doraemonAvatarImg.src = 'img/doraemon_speaking_half.png';
             } else if (state === 'listening') {
                 statusDot.className = 'w-2.5 h-2.5 rounded-full bg-teal-400';
                 statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-teal-950/80 text-teal-300 border border-teal-800';
-                antennaTip.setAttribute('fill', '#14B8A6');
-                glowRing.className = 'absolute inset-0 bg-teal-500/20 rounded-full blur-xl';
-                setEyes('round');
+                glowRing.className = 'absolute w-72 h-72 bg-teal-500/20 rounded-full blur-2xl transition-all duration-300 pointer-events-none';
+                doraemonAvatarImg.src = 'img/doraemon_listening.png';
             } else if (state === 'error') {
                 statusDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500';
                 statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-rose-950/80 text-rose-300 border border-rose-800';
-                antennaTip.setAttribute('fill', '#F43F5E');
-                setEyes('round');
+                glowRing.className = 'absolute w-72 h-72 bg-rose-500/20 rounded-full blur-2xl transition-all duration-300 pointer-events-none';
+                doraemonAvatarImg.src = 'img/doraemon_surprised.png';
             } else {
                 statusDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
                 statusPill.className = 'inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mt-3 bg-slate-800 text-slate-300 border border-slate-700';
-                antennaTip.setAttribute('fill', '#64748B');
-                setEyes('round');
-            }
-        }
-
-        function setEyes(mode) {
-            if (mode === 'happy') {
-                leftEyeRound.classList.add('hidden');
-                rightEyeRound.classList.add('hidden');
-                leftEyeHappy.classList.remove('hidden');
-                rightEyeHappy.classList.remove('hidden');
-            } else {
-                leftEyeRound.classList.remove('hidden');
-                rightEyeRound.classList.remove('hidden');
-                leftEyeHappy.classList.add('hidden');
-                rightEyeHappy.classList.add('hidden');
+                glowRing.className = 'absolute w-72 h-72 bg-slate-500/10 rounded-full blur-2xl transition-all duration-300 pointer-events-none';
+                doraemonAvatarImg.src = 'img/doraemon_idle.png';
             }
         }
 
         function setMouthAmplitude(amp) {
-            const h = Math.min(24, Math.max(4, amp * 40));
-            const y = 116 - (h / 2);
-            mouthRect.setAttribute('height', h);
-            mouthRect.setAttribute('y', y);
-            mouthRect.setAttribute('rx', h / 2);
+            if (amp < 0.05) {
+                doraemonAvatarImg.src = 'img/doraemon_idle.png';
+            } else if (amp < 0.35) {
+                doraemonAvatarImg.src = 'img/doraemon_speaking_half.png';
+            } else {
+                doraemonAvatarImg.src = 'img/doraemon_speaking.png';
+            }
         }
 
         async function toggleSession() {
