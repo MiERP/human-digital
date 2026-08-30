@@ -276,18 +276,19 @@ class KnowledgeSearchEngine:
             except Exception as e:
                 logger.warning(f"CSE search failed for '{query}': {e}")
 
-        # 5. Fallback to Wikipedia (Simple English) — also used if CSE disabled.
+        # 5. Fallback to Wikipedia (Vietnamese / Simple / English) in parallel
         if not results:
             try:
-                wiki_results = await asyncio.to_thread(
-                    self._search_wikipedia, query, top_k, topic_hint
+                wiki_results = await self._search_wikipedia(
+                    query, top_k, topic_hint
                 )
                 wiki_results = self._validate_and_clean(wiki_results, child_id)
                 results = wiki_results[:top_k]
-                backend_used = "wikipedia"
-                logger.info(
-                    f"Wikipedia returned {len(results)} results for '{query}'"
-                )
+                if results:
+                    backend_used = "wikipedia"
+                    logger.info(
+                        f"Wikipedia returned {len(results)} results for '{query}'"
+                    )
             except Exception as e:
                 logger.error(f"Wikipedia search failed for '{query}': {e}")
 
@@ -319,21 +320,31 @@ class KnowledgeSearchEngine:
 
     # ==================== Backends ====================
 
+    def _clean_natural_query(self, query: str) -> str:
+        """Loại bỏ các từ hỏi tự nhiên và dấu câu để trích xuất thực thể chính cho Wikipedia / Search API."""
+        q = query.strip()
+        patterns = [
+            r"^(ai là|ai sinh ra|ai lập nên|ai sáng lập|kể về|kể cho em về|kể cho bé về|giải thích về|cho mình hỏi về|cho em hỏi về|đố doraemon biết|bạn có biết|bạn biết gì về|nguồn gốc của|lịch sử của|thông tin về)\s+",
+            r"\s+(là ai|ở đâu|vào năm nào|sinh năm bao nhiêu|như thế nào|tại sao|để làm gì|là gì|có gì đặc biệt)\s*[\?\!\.]*$",
+        ]
+        cleaned = q
+        for p in patterns:
+            cleaned = re.sub(p, "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = cleaned.rstrip("?!. ").strip()
+        return cleaned if len(cleaned) >= 2 else q
+
     def _search_google_cse(
         self, query: str, top_k: int, topic_hint: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Calls Google Programmable Search Engine REST API. topic_hint is applied
         to bias the query toward the intended domain.
-
-        Query format example:
-            https://www.googleapis.com/customsearch/v1
-                ?key=API_KEY&cx=SEARCH_ENGINE_ID&q=Hai+Ba+Trung
         """
+        clean_q = self._clean_natural_query(query)
         params = {
             "key": self.cse_key,
             "cx": self.cse_id,
-            "q": self._apply_topic_hint(query, topic_hint),
+            "q": self._apply_topic_hint(clean_q, topic_hint),
             "num": min(top_k, 10),
         }
         url = f"{self.CSE_ENDPOINT}?{urllib.parse.urlencode(params)}"
@@ -361,24 +372,29 @@ class KnowledgeSearchEngine:
         return results
 
     def _is_vietnamese(self, text: str) -> bool:
+        """Kiểm tra xem câu hỏi có phải tiếng Việt không (cả có dấu và không dấu)."""
         vn_chars = "àáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ"
-        return any(c in vn_chars for c in text.lower())
+        if any(c in vn_chars for c in text.lower()):
+            return True
+        vn_words = {"la", "cua", "va", "trong", "nguoi", "nuoc", "song", "nui", "vua", "bac", "nam", "thanh", "tran", "hai", "ba", "trung", "le", "ly", "dinh", "nguyen", "quang", "ho", "chi", "minh", "khung", "long"}
+        tokens = set(text.lower().split())
+        return bool(tokens & vn_words)
 
-    def _search_wikipedia(
+    async def _search_wikipedia(
         self, query: str, top_k: int, topic_hint: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Wikipedia multi-tier search:
-        1. If Vietnamese, try vi.wikipedia.org (Opensearch -> Fulltext search).
-        2. Try Simple English Wikipedia (Opensearch -> Fulltext search).
-        3. Try English Wikipedia (Opensearch -> Fulltext search).
+        Wikipedia multi-tier async parallel search:
+        1. Tiếng Việt (vi.wikipedia.org)
+        2. Simple English Wikipedia (simple.wikipedia.org)
+        3. Standard English Wikipedia fallback (en.wikipedia.org)
         """
-        clean_query = query.strip()
+        clean_query = self._clean_natural_query(query)
         is_vn = self._is_vietnamese(clean_query)
 
-        # 1. Tiếng Việt (nếu có dấu hoặc từ tiếng Việt)
+        # 1. Tiếng Việt
         if is_vn:
-            results = self._fetch_wiki_combined(
+            results = await self._fetch_wiki_combined(
                 query=clean_query,
                 lang="vi",
                 source_name="Wikipedia (Tiếng Việt)",
@@ -388,7 +404,7 @@ class KnowledgeSearchEngine:
                 return results
 
         # 2. Simple English Wikipedia
-        results = self._fetch_wiki_combined(
+        results = await self._fetch_wiki_combined(
             query=clean_query,
             lang="simple",
             source_name="Wikipedia (Simple English)",
@@ -398,7 +414,7 @@ class KnowledgeSearchEngine:
             return results
 
         # 3. Standard English Wikipedia fallback
-        results = self._fetch_wiki_combined(
+        results = await self._fetch_wiki_combined(
             query=clean_query,
             lang="en",
             source_name="Wikipedia (English)",
@@ -406,19 +422,8 @@ class KnowledgeSearchEngine:
         )
         return results
 
-    def _fetch_wiki_combined(
-        self,
-        query: str,
-        lang: str,
-        source_name: str,
-        top_k: int,
-    ) -> List[Dict[str, Any]]:
-        """
-        Kết hợp OpenSearch (tìm theo tiêu đề bài viết) và Full-text Search (tìm theo nội dung).
-        """
-        titles: List[str] = []
-
-        # Bước 1: OpenSearch (Nhanh và chính xác nhất cho danh từ/thực thể)
+    def _sync_opensearch(self, query: str, lang: str) -> List[str]:
+        """OpenSearch theo tiêu đề mục từ trên Wikipedia."""
         try:
             opensearch_url = (
                 f"https://{lang}.wikipedia.org/w/api.php?action=opensearch"
@@ -428,57 +433,80 @@ class KnowledgeSearchEngine:
                 opensearch_url,
                 headers={"User-Agent": self.USER_AGENT},
             )
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
+            with urllib.request.urlopen(req, timeout=1.8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if len(data) >= 2 and data[1]:
-                titles.extend(data[1])
+                return data[1]
         except Exception as e:
             logger.debug(f"Opensearch failed for '{query}' on {lang}.wikipedia: {e}")
+        return []
 
-        # Bước 2: Nếu OpenSearch không có kết quả -> Full-text search (list=search)
+    def _sync_fulltext_search(self, query: str, lang: str) -> List[str]:
+        """Fulltext search theo nội dung trên Wikipedia."""
+        try:
+            ft_url = (
+                f"https://{lang}.wikipedia.org/w/api.php?action=query"
+                f"&list=search&format=json&srlimit=5&srsearch={urllib.parse.quote(query)}"
+            )
+            req = urllib.request.Request(
+                ft_url,
+                headers={"User-Agent": self.USER_AGENT},
+            )
+            with urllib.request.urlopen(req, timeout=1.8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            search_items = data.get("query", {}).get("search", []) or []
+            return [item.get("title") for item in search_items if item.get("title")]
+        except Exception as e:
+            logger.debug(f"Fulltext search failed for '{query}' on {lang}.wikipedia: {e}")
+        return []
+
+    async def _fetch_wiki_combined(
+        self,
+        query: str,
+        lang: str,
+        source_name: str,
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Tìm kiếm Wikipedia bất đồng bộ song song:
+        - OpenSearch / Fulltext search để lấy danh sách tiêu đề.
+        - Lấy toàn bộ bản tóm tắt (summary) đồng thời bằng asyncio.gather.
+        """
+        # Bước 1: OpenSearch
+        titles = await asyncio.to_thread(self._sync_opensearch, query, lang)
+
+        # Bước 2: Nếu OpenSearch không có -> Full-text search
         if not titles:
-            try:
-                ft_url = (
-                    f"https://{lang}.wikipedia.org/w/api.php?action=query"
-                    f"&list=search&format=json&srlimit=5&srsearch={urllib.parse.quote(query)}"
-                )
-                req = urllib.request.Request(
-                    ft_url,
-                    headers={"User-Agent": self.USER_AGENT},
-                )
-                with urllib.request.urlopen(req, timeout=2.0) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                search_items = data.get("query", {}).get("search", []) or []
-                for item in search_items:
-                    t = item.get("title")
-                    if t and t not in titles:
-                        titles.append(t)
-            except Exception as e:
-                logger.debug(f"Fulltext search failed for '{query}' on {lang}.wikipedia: {e}")
+            titles = await asyncio.to_thread(self._sync_fulltext_search, query, lang)
 
         if not titles:
             return []
 
-        # Bước 3: Lấy tóm tắt (Summary) từ REST API
+        # Bước 3: Lấy tóm tắt (Summary) song song qua REST API
+        selected_titles = titles[:top_k]
+        summary_endpoint = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{{title}}"
+        
+        # Bắn đồng thời các request lấy tóm tắt để giảm độ trễ từ 3x xuống 1x
+        summary_tasks = [
+            asyncio.to_thread(self._wikipedia_summary, title, summary_endpoint)
+            for title in selected_titles
+        ]
+        summaries = await asyncio.gather(*summary_tasks, return_exceptions=True)
+
         results: List[Dict[str, Any]] = []
         base_wiki_url = f"https://{lang}.wikipedia.org/wiki/"
-        summary_endpoint = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{{title}}"
 
-        for idx, title in enumerate(titles, start=1):
-            if len(results) >= top_k:
-                break
-            summary = self._wikipedia_summary(title, summary_endpoint)
-            if not summary:
-                continue
-            results.append(
-                {
-                    "title": title,
-                    "snippet": summary,
-                    "source": source_name,
-                    "source_url": f"{base_wiki_url}{urllib.parse.quote(title)}",
-                    "rank": idx,
-                }
-            )
+        for idx, (title, summary) in enumerate(zip(selected_titles, summaries), start=1):
+            if isinstance(summary, str) and summary.strip():
+                results.append(
+                    {
+                        "title": title,
+                        "snippet": summary,
+                        "source": source_name,
+                        "source_url": f"{base_wiki_url}{urllib.parse.quote(title)}",
+                        "rank": idx,
+                    }
+                )
         return results
 
     def _wikipedia_summary(
@@ -492,7 +520,7 @@ class KnowledgeSearchEngine:
                 url,
                 headers={"User-Agent": self.USER_AGENT},
             )
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
+            with urllib.request.urlopen(req, timeout=1.8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             extract = (data.get("extract") or "").strip()
             if not extract:
@@ -520,11 +548,8 @@ class KnowledgeSearchEngine:
         """
         Two-stage safety on returned results:
         1. URL whitelist check (drop unsafe URLs).
-        2. Content filter on the snippet itself (drop results whose text trips
-           the child-safety guard) — fixes the gap where only the query was
-           filtered, not the returned content.
-
-        Then truncate snippets and re-assign ranks.
+        2. Content filter on the snippet itself using evaluate_educational_content
+           (cho phép ngữ cảnh lịch sử giáo dục, loại bỏ nội dung khiêu dâm/tự hại/bạo lực kinh dị).
         """
         cleaned: List[Dict[str, Any]] = []
         for r in results:
@@ -536,15 +561,11 @@ class KnowledgeSearchEngine:
                 continue
 
             snippet = self._truncate_snippet(r.get("snippet", "").strip())
-            # Content-filter the snippet: if the returned text itself is unsafe,
-            # drop the whole result rather than risk speaking it to a child.
-            is_safe, category, _ = self.safety.evaluate_content(snippet, child_id)
+            # Kiểm duyệt nội dung bằng bộ lọc giáo dục chuyên biệt
+            is_safe, category = self.safety.evaluate_educational_content(snippet, child_id)
             if not is_safe:
                 logger.warning(
                     f"Dropping result with unsafe snippet ({category}): {url}"
-                )
-                self.safety._log_safety_event(
-                    child_id, f"UNSAFE_SNIPPET_{category}", snippet[:120], "DROP_RESULT"
                 )
                 continue
 

@@ -1149,5 +1149,8 @@ if __name__ == "__main__":
         port=port,
         reload=is_dev,
         reload_dirs=[backend_dir] if is_dev else None,
-        reload_excludes=["*.db", "*.db-wal", "*.db-shm", "*.log", "data/*", "data/**", "**/data/**", "*.sqlite*"] if is_dev else None
+        reload_excludes=["*.db", "*.db-wal", "*.db-shm", "*.log", "data/*", "data/**", "**/data/**", "*.sqlite*"] if is_dev else None,
+        ws_ping_interval=10,
+        ws_ping_timeout=30,
+        timeout_keep_alive=60
     )

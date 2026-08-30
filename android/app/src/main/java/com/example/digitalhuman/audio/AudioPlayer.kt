@@ -29,18 +29,18 @@ class AudioPlayer(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
-        // Pre-buffer mục tiêu ~80ms audio trước khi phát để chống rách tiếng mà vẫn đảm bảo phản hồi tức thì.
+        // Pre-buffer mục tiêu ~180ms audio trước khi phát để chống rách tiếng & jitter trên mạng WAN/VPS.
         private const val BYTES_PER_SECOND = SAMPLE_RATE * 2
-        private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 80 / 1000
+        private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 180 / 1000
 
-        // Timeout pre-buffer ngắn để giảm độ trễ khởi đầu giọng nói.
-        private const val MAX_PREBUFFER_WAIT_MS = 120L
+        // Timeout pre-buffer tối đa để bắt đầu phát ngay cả khi stream chậm.
+        private const val MAX_PREBUFFER_WAIT_MS = 250L
 
-        // Khoảng lặng để xả sạch buffer khi Gemini đang tạm dừng giữa câu (~200ms).
-        private const val SILENT_CYCLES_TO_FINISH = 20
+        // Khoảng lặng để xả buffer khi Gemini đang tạm dừng giữa câu (~250ms).
+        private const val SILENT_CYCLES_TO_FINISH = 25
 
-        // Khi server đã báo turn_complete, chỉ cần chờ ~80ms (8 cycles) để xả nốt phần cứng rồi mở mic ngay.
-        private const val SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE = 8
+        // Khi server đã báo turn_complete, chờ ~150ms (15 cycles) để AudioTrack xả sạch nốt phần cứng rồi mở mic.
+        private const val SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE = 15
 
         // Khuếch đại âm lượng phát lại: 2.0x để giọng Doraemon phát ra loa ngoài to rõ, trong trẻo.
         private const val VOLUME_GAIN = 2.0f

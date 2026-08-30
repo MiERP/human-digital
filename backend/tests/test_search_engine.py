@@ -252,6 +252,49 @@ class TestKnowledgeSearchEngine(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(res["success"])
         self.assertEqual(res["results"], [])
 
+    # ==================== Curated Knowledge & Unaccented Lookups ====================
+
+    async def test_curated_lookup_unaccented_and_aliases(self):
+        """Unaccented queries like 'ngo quyen', 'dinh tien hoang', 'mat troi', 'vinh ha long' must hit curated knowledge."""
+        test_queries = [
+            ("ngo quyen", "Ngô Quyền"),
+            ("dinh tien hoang", "Đinh Bộ Lĩnh"),
+            ("mat troi", "Mặt Trời"),
+            ("dien bien phu", "Điện Biên Phủ"),
+            ("son doong", "Sơn Đoòng"),
+            ("he mat troi", "Hệ Mặt Trời"),
+            ("quang hop", "Quang hợp"),
+            ("ai la bac ho", "Hồ Chí Minh"),
+        ]
+        for query, expected_keyword in test_queries:
+            res = await self.engine.search(query)
+            self.assertTrue(res["success"], f"Failed for query: {query}")
+            self.assertEqual(res["source_backend"], "curated", f"Expected curated for {query}")
+            self.assertIn(expected_keyword, res["results"][0]["snippet"] + res["results"][0]["title"])
+
+    def test_clean_natural_query(self):
+        """Natural language question patterns should be stripped."""
+        self.assertEqual(self.engine._clean_natural_query("Ai là Ngô Quyền?"), "Ngô Quyền")
+        self.assertEqual(self.engine._clean_natural_query("Kể cho em về Vịnh Hạ Long"), "Vịnh Hạ Long")
+        self.assertEqual(self.engine._clean_natural_query("Bác Hồ sinh năm bao nhiêu?"), "Bác Hồ")
+        self.assertEqual(self.engine._clean_natural_query("Đố Doraemon biết Mặt Trời là gì?"), "Mặt Trời")
+
+    def test_educational_safety_allows_history_snippets(self):
+        """Historical snippets containing battle/war/invader terms must NOT be dropped."""
+        history_snippet = (
+            "Ngô Quyền dùng kế cắm cọc nhọn dưới lòng sông Bạch Đằng, đánh tan quân Nam Hán "
+            "giành lại độc lập cho dân tộc. Tướng giặc bị giết chết trong trận đánh."
+        )
+        is_safe, category = self.engine.safety.evaluate_educational_content(history_snippet)
+        self.assertTrue(is_safe)
+        self.assertIsNone(category)
+
+        # Extreme non-educational violence still blocked
+        violent_snippet = "Hướng dẫn tự tử cắt cổ tay bằng dao lam sắc nhọn."
+        is_safe_v, cat_v = self.engine.safety.evaluate_educational_content(violent_snippet)
+        self.assertFalse(is_safe_v)
+        self.assertEqual(cat_v, "VIOLENCE")
+
 
 if __name__ == "__main__":
     unittest.main()
