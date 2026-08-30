@@ -513,6 +513,35 @@ CURATED_KNOWLEDGE: Dict[str, Dict[str, any]] = {
         "key_figures": ["3 miền", "ba miền", "các miền việt nam", "miền bắc", "miền trung", "miền nam", "3 mien viet nam"],
     },
 
+    "chau_a": {
+        "vi": (
+            "Châu Á (Asia) là châu lục lớn nhất và đông dân nhất hành tinh, gồm 48 quốc gia độc lập. "
+            "Quốc gia có diện tích rộng lớn nhất châu Á và thế giới là nước Nga, còn quốc gia rộng lớn nhất nằm trọn vẹn ở châu Á là Trung Quốc. "
+            "Việt Nam chúng mình cũng nằm ở khu vực Đông Nam Á xinh đẹp của châu Á đó!"
+        ),
+        "en": (
+            "Asia is the largest and most populous continent, with 48 sovereign nations. Russia is the largest transcontinental country, and China is the largest country entirely in Asia."
+        ),
+        "category": "geography",
+        "key_figures": [
+            "châu á", "chau a", "các quốc gia châu á", "quốc gia lớn nhất châu á",
+            "bao nhiêu quốc gia châu á", "nước lớn nhất châu á", "chau luc lon nhat"
+        ],
+    },
+
+    "cac_chau_luc": {
+        "vi": (
+            "Trái Đất chúng ta có 7 châu lục: Châu Á (lớn nhất), Châu Phi, Châu Bắc Mỹ, Châu Nam Mỹ, Châu Nam Cực (lạnh nhất), "
+            "Châu Âu và Châu Đại Dương; cùng với 5 đại dương mênh mông: Thái Bình Dương (lớn nhất), Đại Tây Dương, Ấn Độ Dương, "
+            "Bắc Băng Dương và Nam Đại Dương."
+        ),
+        "en": (
+            "Earth has 7 continents (Asia, Africa, North America, South America, Antarctica, Europe, Oceania) and 5 oceans (Pacific, Atlantic, Indian, Arctic, Southern)."
+        ),
+        "category": "geography",
+        "key_figures": ["châu lục", "các châu lục", "7 châu lục", "5 đại dương", "bao nhiêu châu lục", "chau luc", "dai duong"],
+    },
+
     # ==================== 4. HỆ MẶT TRỜI & THIÊN VĂN VŨ TRỤ ====================
     "he_mat_troi": {
         "vi": (

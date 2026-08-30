@@ -120,9 +120,9 @@ VAD_END_SENSITIVITY = os.getenv("VAD_END_SENSITIVITY", "low").lower()
 VAD_SILENCE_DURATION_MS = int(os.getenv("VAD_SILENCE_DURATION_MS", "1100"))
 VAD_PREFIX_PADDING_MS = int(os.getenv("VAD_PREFIX_PADDING_MS", "200"))
 
-# Affective dialog: model adapts delivery (tone/pitch/pace) to user's emotion in real-time.
-# Available on Gemini 2.5 native audio models via v1beta. Harmless no-op if not supported.
-ENABLE_AFFECTIVE_DIALOG = os.getenv("ENABLE_AFFECTIVE_DIALOG", "true").lower() in ("1", "true", "yes")
+# Affective dialog: experimental flag. Disabled by default to prevent Error 1007
+# (modal conflict when thought text tokens mix with AUDIO response during tool calls).
+ENABLE_AFFECTIVE_DIALOG = os.getenv("ENABLE_AFFECTIVE_DIALOG", "false").lower() in ("1", "true", "yes")
 
 # Client-side VAD mode: when true, server-side automatic activity detection is disabled.
 # Client (Silero on-device) sends `activity_start` before audio and `activity_end` after,
