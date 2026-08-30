@@ -128,9 +128,6 @@ class GeminiLiveClient(
                             "turn_complete" -> {
                                 Log.d(TAG, "Gemini turn_complete received.")
                                 onTurnComplete?.invoke()
-                                if (currentState != ConnectionState.SPEAKING && currentState != ConnectionState.SLEEPING) {
-                                    updateState(ConnectionState.LISTENING)
-                                }
                             }
                             "interrupted" -> {
                                 Log.d(TAG, "Gemini turn interrupted by user.")
@@ -140,9 +137,6 @@ class GeminiLiveClient(
                             "waiting_for_input" -> {
                                 Log.d(TAG, "Gemini waiting_for_input received.")
                                 onTurnComplete?.invoke()
-                                if (currentState != ConnectionState.SPEAKING && currentState != ConnectionState.SLEEPING) {
-                                    updateState(ConnectionState.LISTENING)
-                                }
                             }
                             "input_transcription", "output_transcription" -> {
                                 val text = json.optString("text", "")

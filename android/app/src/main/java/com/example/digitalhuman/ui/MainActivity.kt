@@ -154,7 +154,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
+        volumeControlStream = android.media.AudioManager.STREAM_VOICE_CALL
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val localSetupDone = prefs.getBoolean(KEY_SETUP_DONE, false)

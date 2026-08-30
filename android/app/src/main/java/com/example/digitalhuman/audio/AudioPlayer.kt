@@ -19,8 +19,8 @@ import kotlin.math.sqrt
  * - Sample Rate: 24,000 Hz (24kHz)
  * - Channel: Mono
  * - Encoding: PCM 16-bit
- * - Báo cáo trạng thái đang phát (playback state) chính xác dựa trên hardware playback head position.
- * - Tính toán biên độ âm lượng thời gian thực để cử động môi Robot.
+ * - Audio Stream: USAGE_VOICE_COMMUNICATION (chuẩn VoIP đồng bộ với AudioRecord)
+ * - Báo cáo trạng thái đang phát chính xác, loại bỏ hoàn toàn hiện tượng tự ngắt tiếng.
  */
 class AudioPlayer(
     private val onOutputAmplitude: (Float) -> Unit = {},
@@ -38,6 +38,9 @@ class AudioPlayer(
 
         // Timeout pre-buffer tối đa để bắt đầu phát ngay cả khi stream chậm (250ms).
         private const val MAX_PREBUFFER_WAIT_MS = 250L
+
+        // Chu kỳ chờ xả sạch phần cứng sau khi nhận turn_complete từ server (~250ms).
+        private const val HARDWARE_DRAIN_CYCLES = 25
 
         // Khuếch đại âm lượng phát lại: 1.8x để giọng Doraemon to rõ nhưng không bị méo tiếng.
         private const val VOLUME_GAIN = 1.8f
@@ -66,7 +69,6 @@ class AudioPlayer(
     private var isServerTurnComplete = false
 
     private val pendingBytes = AtomicInteger(0)
-    private var totalFramesWritten = 0L
 
     private fun initAudioTrack(): Boolean {
         try {
@@ -78,7 +80,7 @@ class AudioPlayer(
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
@@ -95,7 +97,6 @@ class AudioPlayer(
 
             audioTrack?.setVolume(AudioTrack.getMaxVolume())
             audioTrack?.play()
-            totalFramesWritten = 0L
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize AudioTrack: ${e.message}")
@@ -142,9 +143,6 @@ class AudioPlayer(
                         initAudioTrack()
                         written = audioTrack?.write(gainedChunk, 0, gainedChunk.size) ?: 0
                     }
-                    if (written > 0) {
-                        totalFramesWritten += (written / 2)
-                    }
 
                     // Tính biên độ âm lượng nhép môi Doraemon
                     val amplitude = calculateRMS(chunk)
@@ -153,25 +151,12 @@ class AudioPlayer(
                     onOutputAmplitude(0f)
                     if (isCurrentlyPlayingAudio) {
                         silentCycles++
-                        // Kiểm tra tiến trình xả âm thanh trong phần cứng AudioTrack
-                        val currentHead = try {
-                            audioTrack?.playbackHeadPosition?.toLong() ?: 0L
-                        } catch (_: Exception) {
-                            totalFramesWritten
-                        }
-                        val hardwareDrained = currentHead >= totalFramesWritten || silentCycles >= 30
-
-                        if (isServerTurnComplete && hardwareDrained) {
-                            // Turn đã hoàn tất và âm thanh phần cứng đã xả sạch
+                        // CHỈ kết thúc lượt phát khi VÀ CHỈ KHI server đã báo turn_complete
+                        // VÀ hàng đợi đã xả sạch phần cứng trong ít nhất HARDWARE_DRAIN_CYCLES (250ms).
+                        // TUYỆT ĐỐI KHÔNG tự ý ngắt lượt phát giữa chừng khi server đang xử lý Tool / tìm kiếm.
+                        if (isServerTurnComplete && silentCycles >= HARDWARE_DRAIN_CYCLES) {
                             isCurrentlyPlayingAudio = false
                             isServerTurnComplete = false
-                            onPlaybackStateChanged(false)
-                            silentCycles = 0
-                            isPreBuffering = true
-                            preBufferStartedAt = System.currentTimeMillis()
-                        } else if (!isServerTurnComplete && silentCycles >= 40) {
-                            // Server chưa báo turn_complete nhưng tạm ngừng stream quá 400ms
-                            isCurrentlyPlayingAudio = false
                             onPlaybackStateChanged(false)
                             silentCycles = 0
                             isPreBuffering = true
@@ -185,8 +170,8 @@ class AudioPlayer(
     }
 
     fun enqueueAudio(data: ByteArray) {
-        isServerTurnComplete = false
         val wasIdle = audioQueue.isEmpty() && pendingBytes.get() == 0 && !isCurrentlyPlayingAudio
+        isServerTurnComplete = false
         audioQueue.add(data)
         pendingBytes.addAndGet(data.size)
 
@@ -199,7 +184,7 @@ class AudioPlayer(
     }
 
     /**
-     * Báo cho player biết server đã kết thúc turn nói hiện tại (turn_complete).
+     * Báo cho player biết server đã kết thúc gửi dữ liệu cho lượt này (turn_complete).
      */
     fun notifyTurnComplete() {
         isServerTurnComplete = true
@@ -209,7 +194,7 @@ class AudioPlayer(
     }
 
     /**
-     * Dừng ngay lập tức khi bé ngắt lời (Barge-in / Interrupt)
+     * Dừng ngay lập tức khi bé ngắt lời (Barge-in / Interrupt) hoặc phiên kết thúc.
      */
     fun stopAndFlush() {
         synchronized(this) {
@@ -226,7 +211,6 @@ class AudioPlayer(
             } catch (e: Exception) {
                 Log.e(TAG, "Error in stopAndFlush: ${e.message}")
             }
-            totalFramesWritten = 0L
         }
         isCurrentlyPlayingAudio = false
         onOutputAmplitude(0f)
