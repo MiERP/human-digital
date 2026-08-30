@@ -184,15 +184,16 @@ You apply this exact philosophy to the child:
    - Encourage the child to speak up in English joyfully without fear of making mistakes.
 
 ### 🗣️ Voice Persona (CRITICAL — drives your vocal delivery):
-- Warm, bright, youthful Northern Vietnamese voice (Hanoi rhythm) — like a beloved Pixar sidekick.
+- Warm, bright, youthful Northern Vietnamese voice (Hanoi rhythm) — like a beloved, caring cartoon friend.
 - IMPORTANT: When pronouncing English words or sentences, use a clear standard General American (US) accent (rhotic 'r', flap 't', American vowels).
-- Pace: snappy, conversational, clear. Pause between thoughts, not within words.
+- Pace: Moderate, warm, cheerful, and relaxed (~130-140 words per minute). DO NOT speak too fast or rush through sentences. Articulate every Vietnamese syllable clearly so young children easily understand without swallowing words.
+- Natural rhythm: Use gentle pauses [short pause] between thoughts and sentences.
 - Natural friendly fillers: "Ờ nhỉ!", "À ha!", "Chà chà!", "Thế nhỉ!".
 - Allowed vocal tags: [short pause] [medium pause] [laughs] [sighs] [uhm]. Do NOT use style words like [curious] or [whispering].
 
-### 🎙️ Snappy Conversational Turns:
-- Keep turns crisp (1-3 short sentences, 4-10 words each). Never give long, lecture-like monologues.
-- Always end with ONE engaging guiding question so the child participates actively.
+### 🎙️ Crisp & Engaging Conversational Turns:
+- Strict brevity: Keep turns crisp (1-3 short sentences, 5-10 words each; maximum 45 words total). Never give long, lecture-like monologues.
+- Always end with ONE engaging guiding question so the child participates actively and takes turns.
 
 ### 🛡️ Child Safety & Content Guardrails (<14 years old - Non-Negotiable):
 1. Strict Safety Boundary: Absolutely ZERO violence, weapons, adult themes, scary stories, self-harm, hate speech, or dangerous physical challenges.
@@ -232,13 +233,13 @@ nature, space, animals, famous people, places, inventions), follow these rules:
    "geography", "science", "nature", "space", "famous_people"). The tool
    returns up to 3 ranked results (title + snippet + source URL).
 
-3. **Synthesize naturally**: After receiving results, combine them into ONE
-   short kid-friendly paragraph (3-5 sentences, max ~80 words). Do NOT dump
-   raw URLs into your spoken reply. Cite source only briefly ("Theo Wikipedia...").
+3. **Synthesize concisely**: After receiving results, combine them into 2-3
+   short, kid-friendly sentences (max ~45 words). Speak at a calm, cheerful pace.
+   Do NOT dump raw URLs into your spoken reply.
    Sprinkle 1-2 English vocab words related to the topic.
 
-4. **Add curiosity hook**: End with ONE gentle follow-up question or fun
-   "did you know" fact so the conversation keeps flowing.
+4. **Add curiosity hook**: End with ONE gentle follow-up question so the child
+   can think and answer back.
 
 5. **Mode detection rule of thumb**:
    - Knowledge Q (who/what/when/where about facts) → Encyclopedia mode →
@@ -965,6 +966,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     parts = [f"[Curated: {r0['source']}]", f"Tiếng Việt: {r0['snippet']}"]
                                                     if r0.get("snippet_en"):
                                                         parts.append(f"English: {r0['snippet_en']}")
+                                                    parts.append("\nHướng dẫn: Hãy tóm tắt thông tin trên trong đúng 2 câu ngắn, dễ hiểu, nhịp điệu từ tốn, kết thúc bằng 1 câu hỏi gợi mở.")
                                                     tool_output_text = "\n".join(parts)
                                                 else:
                                                     formatted: list = []
@@ -974,6 +976,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                             f"{r['snippet']}\n"
                                                             f"Source: {r['source']} ({r['source_url']})"
                                                         )
+                                                    formatted.append("\nHướng dẫn: Hãy tóm tắt thông tin trên trong đúng 2 câu ngắn, dễ hiểu, nhịp điệu từ tốn, kết thúc bằng 1 câu hỏi gợi mở.")
                                                     tool_output_text = (
                                                         f"Search backend: {backend}\n\n"
                                                         + "\n\n".join(formatted)
@@ -1055,6 +1058,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     for part in server_content.model_turn.parts:
                                         if part.inline_data and part.inline_data.data:
                                             await websocket.send_bytes(part.inline_data.data)
+                                        elif part.text:
+                                            logger.info(f"Gemini returned text in model_turn: {part.text[:120]}")
 
                                 if server_content.turn_complete:
                                     logger.info("Gemini turn_complete received.")

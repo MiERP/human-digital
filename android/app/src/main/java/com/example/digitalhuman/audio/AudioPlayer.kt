@@ -3,9 +3,11 @@ package com.example.digitalhuman.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicInteger
@@ -17,7 +19,7 @@ import kotlin.math.sqrt
  * - Sample Rate: 24,000 Hz (24kHz)
  * - Channel: Mono
  * - Encoding: PCM 16-bit
- * - Báo cáo trạng thái đang phát (playback state) chính xác cho Echo Gating.
+ * - Báo cáo trạng thái đang phát (playback state) chính xác dựa trên hardware playback head position.
  * - Tính toán biên độ âm lượng thời gian thực để cử động môi Robot.
  */
 class AudioPlayer(
@@ -25,25 +27,20 @@ class AudioPlayer(
     private val onPlaybackStateChanged: (Boolean) -> Unit = {}
 ) {
     companion object {
+        private const val TAG = "AudioPlayer"
         const val SAMPLE_RATE = 24000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
-        // Pre-buffer mục tiêu ~180ms audio trước khi phát để chống rách tiếng & jitter trên mạng WAN/VPS.
+        // Pre-buffer ~180ms audio trước khi phát để chống rách tiếng & jitter trên mạng WAN/VPS.
         private const val BYTES_PER_SECOND = SAMPLE_RATE * 2
         private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 180 / 1000
 
-        // Timeout pre-buffer tối đa để bắt đầu phát ngay cả khi stream chậm.
+        // Timeout pre-buffer tối đa để bắt đầu phát ngay cả khi stream chậm (250ms).
         private const val MAX_PREBUFFER_WAIT_MS = 250L
 
-        // Khoảng lặng để xả buffer khi Gemini đang tạm dừng giữa câu (~250ms).
-        private const val SILENT_CYCLES_TO_FINISH = 25
-
-        // Khi server đã báo turn_complete, chờ ~150ms (15 cycles) để AudioTrack xả sạch nốt phần cứng rồi mở mic.
-        private const val SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE = 15
-
-        // Khuếch đại âm lượng phát lại: 2.0x để giọng Doraemon phát ra loa ngoài to rõ, trong trẻo.
-        private const val VOLUME_GAIN = 2.0f
+        // Khuếch đại âm lượng phát lại: 1.8x để giọng Doraemon to rõ nhưng không bị méo tiếng.
+        private const val VOLUME_GAIN = 1.8f
     }
 
     private var audioTrack: AudioTrack? = null
@@ -63,53 +60,72 @@ class AudioPlayer(
     private var isPreBuffering = true
 
     @Volatile
+    private var preBufferStartedAt = 0L
+
+    @Volatile
     private var isServerTurnComplete = false
 
     private val pendingBytes = AtomicInteger(0)
+    private var totalFramesWritten = 0L
+
+    private fun initAudioTrack(): Boolean {
+        try {
+            audioTrack?.release()
+        } catch (_: Exception) {}
+
+        return try {
+            val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+            audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(SAMPLE_RATE)
+                        .setChannelMask(CHANNEL_CONFIG)
+                        .setEncoding(AUDIO_FORMAT)
+                        .build()
+                )
+                .setBufferSizeInBytes(maxOf(minBufferSize * 2, BYTES_PER_SECOND / 2))
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+
+            audioTrack?.setVolume(AudioTrack.getMaxVolume())
+            audioTrack?.play()
+            totalFramesWritten = 0L
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize AudioTrack: ${e.message}")
+            false
+        }
+    }
 
     fun start(scope: CoroutineScope) {
         if (isPlaying) return
-
-        val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-
-        audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setSampleRate(SAMPLE_RATE)
-                    .setChannelMask(CHANNEL_CONFIG)
-                    .setEncoding(AUDIO_FORMAT)
-                    .build()
-            )
-            .setBufferSizeInBytes(minBufferSize * 2)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-
-        audioTrack?.setVolume(AudioTrack.getMaxVolume())
-        audioTrack?.play()
+        initAudioTrack()
         isPlaying = true
 
         playbackJob = scope.launch(Dispatchers.IO) {
             var silentCycles = 0
             isPreBuffering = true
-            var preBufferStartedAt = System.currentTimeMillis()
+            preBufferStartedAt = System.currentTimeMillis()
+
             while (isActive && isPlaying) {
-                // Pre-buffer đủ ~150ms hoặc hết timeout trước khi phát để triệt tiêu hiện tượng rách âm do độ trễ mạng.
+                // 1. Giai đoạn Pre-buffering: đệm đủ ~180ms hoặc chờ tối đa MAX_PREBUFFER_WAIT_MS
                 if (isPreBuffering) {
                     val waited = System.currentTimeMillis() - preBufferStartedAt
-                    if (pendingBytes.get() >= MIN_PREBUFFER_BYTES || waited >= MAX_PREBUFFER_WAIT_MS) {
+                    if (pendingBytes.get() >= MIN_PREBUFFER_BYTES || waited >= MAX_PREBUFFER_WAIT_MS || (isServerTurnComplete && audioQueue.isNotEmpty())) {
                         isPreBuffering = false
                     } else {
-                        kotlinx.coroutines.delay(10)
+                        delay(10)
                         continue
                     }
                 }
 
+                // 2. Lấy audio chunk từ hàng đợi
                 val chunk = audioQueue.poll()
                 if (chunk != null && chunk.isNotEmpty()) {
                     pendingBytes.addAndGet(-chunk.size)
@@ -119,32 +135,50 @@ class AudioPlayer(
                     }
                     silentCycles = 0
 
-                    audioTrack?.write(applyGain(chunk), 0, chunk.size)
+                    val gainedChunk = applyGain(chunk)
+                    var written = audioTrack?.write(gainedChunk, 0, gainedChunk.size) ?: 0
+                    if (written < 0) {
+                        Log.w(TAG, "AudioTrack write error: $written, reinitializing...")
+                        initAudioTrack()
+                        written = audioTrack?.write(gainedChunk, 0, gainedChunk.size) ?: 0
+                    }
+                    if (written > 0) {
+                        totalFramesWritten += (written / 2)
+                    }
 
-                    // Tính biên độ âm lượng để nhép môi Robot
+                    // Tính biên độ âm lượng nhép môi Doraemon
                     val amplitude = calculateRMS(chunk)
                     onOutputAmplitude(amplitude)
                 } else {
                     onOutputAmplitude(0f)
                     if (isCurrentlyPlayingAudio) {
                         silentCycles++
-                        // Nếu server đã báo turn_complete thì chỉ cần xả nhanh (SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE = 80ms)
-                        // Nếu đang stream dở thì đợi 200ms để tránh ngắt giữa câu.
-                        val finishThreshold = if (isServerTurnComplete) {
-                            SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE
-                        } else {
-                            SILENT_CYCLES_TO_FINISH
+                        // Kiểm tra tiến trình xả âm thanh trong phần cứng AudioTrack
+                        val currentHead = try {
+                            audioTrack?.playbackHeadPosition?.toLong() ?: 0L
+                        } catch (_: Exception) {
+                            totalFramesWritten
                         }
-                        if (silentCycles > finishThreshold) {
+                        val hardwareDrained = currentHead >= totalFramesWritten || silentCycles >= 30
+
+                        if (isServerTurnComplete && hardwareDrained) {
+                            // Turn đã hoàn tất và âm thanh phần cứng đã xả sạch
                             isCurrentlyPlayingAudio = false
                             isServerTurnComplete = false
                             onPlaybackStateChanged(false)
                             silentCycles = 0
                             isPreBuffering = true
                             preBufferStartedAt = System.currentTimeMillis()
+                        } else if (!isServerTurnComplete && silentCycles >= 40) {
+                            // Server chưa báo turn_complete nhưng tạm ngừng stream quá 400ms
+                            isCurrentlyPlayingAudio = false
+                            onPlaybackStateChanged(false)
+                            silentCycles = 0
+                            isPreBuffering = true
+                            preBufferStartedAt = System.currentTimeMillis()
                         }
                     }
-                    kotlinx.coroutines.delay(10)
+                    delay(10)
                 }
             }
         }
@@ -152,9 +186,13 @@ class AudioPlayer(
 
     fun enqueueAudio(data: ByteArray) {
         isServerTurnComplete = false
+        val wasIdle = audioQueue.isEmpty() && pendingBytes.get() == 0 && !isCurrentlyPlayingAudio
         audioQueue.add(data)
         pendingBytes.addAndGet(data.size)
-        if (!isCurrentlyPlayingAudio) {
+
+        if (wasIdle) {
+            isPreBuffering = true
+            preBufferStartedAt = System.currentTimeMillis()
             isCurrentlyPlayingAudio = true
             onPlaybackStateChanged(true)
         }
@@ -162,11 +200,9 @@ class AudioPlayer(
 
     /**
      * Báo cho player biết server đã kết thúc turn nói hiện tại (turn_complete).
-     * Player sẽ chủ động xả nốt hàng đợi và mở mic tức thì ngay khi phát xong frame cuối.
      */
     fun notifyTurnComplete() {
         isServerTurnComplete = true
-        // Nếu hàng đợi đã rỗng hoàn toàn từ trước, mở mic ngay sau một nhịp ngắn
         if (audioQueue.isEmpty() && pendingBytes.get() == 0 && !isCurrentlyPlayingAudio) {
             onPlaybackStateChanged(false)
         }
@@ -182,12 +218,15 @@ class AudioPlayer(
             isPreBuffering = true
             isServerTurnComplete = false
             try {
-                audioTrack?.pause()
-                audioTrack?.flush()
-                audioTrack?.play()
+                if (audioTrack?.state == AudioTrack.STATE_INITIALIZED) {
+                    audioTrack?.pause()
+                    audioTrack?.flush()
+                    audioTrack?.play()
+                }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Error in stopAndFlush: ${e.message}")
             }
+            totalFramesWritten = 0L
         }
         isCurrentlyPlayingAudio = false
         onOutputAmplitude(0f)
@@ -233,9 +272,6 @@ class AudioPlayer(
             sum += normalized * normalized
         }
         val rms = sqrt(sum / shortCount).toFloat()
-        // Map biên độ thật ra thang 0..1 mà KHÔNG kẹp cứng. Giọng Gemini bình thường
-        // RMS ~0.05-0.15, đỉnh ~0.3-0.4, nên nhân 4 để dùng được dải động rộng hơn
-        // cho lip-sync (trước đây nhân 3.5 + clamp 1.0 làm mép dính ở max).
         return (rms * 4.0f).coerceIn(0.0f, 1.0f)
     }
 }
