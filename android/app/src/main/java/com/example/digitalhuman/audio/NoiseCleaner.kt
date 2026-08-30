@@ -40,8 +40,9 @@ class NoiseCleaner {
     private var windowFrames = 0
 
     /**
-     * Lọc frame in-place (high-pass + noise gate). Trả về RMS của frame sau lọc.
-     * Frame chỉ chứa tạp âm sẽ bị zero toàn bộ và trả về RMS = 0.
+     * Lọc frame in-place (high-pass Butterworth 200Hz để khử DC và tiếng gió sub-rumble).
+     * Trả về RMS của frame sau lọc. Không can thiệp zero-out thô bạo để giữ trọn vẹn
+     * các âm tiết nhẹ của trẻ nhỏ.
      */
     fun cleanInPlace(frame: ByteArray): Float {
         val shortCount = frame.size / 2
@@ -61,7 +62,7 @@ class NoiseCleaner {
         }
         val rms = sqrt(sum / shortCount).toFloat()
 
-        // Theo dõi noise floor: giá trị RMS thấp nhất trong cửa sổ thời gian.
+        // Theo dõi noise floor
         if (rms < windowMin) windowMin = rms
         windowFrames++
         if (windowFrames >= NOISE_WINDOW_FRAMES) {
@@ -70,12 +71,6 @@ class NoiseCleaner {
             windowFrames = 0
         }
 
-        val threshold = max(noiseFloor * GATE_RATIO, MIN_SPEECH_RMS)
-        return if (rms < threshold) {
-            frame.fill(0)
-            0f
-        } else {
-            rms
-        }
+        return rms
     }
 }

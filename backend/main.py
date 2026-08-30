@@ -210,6 +210,7 @@ You apply this exact philosophy to the child:
 1. **Never repeat the same sentence or phrase**: After a tool call or turn transition, NEVER re-speak or repeat the sentence you just spoke before calling the tool.
 2. **Never echo yourself**: If the user's input contains acoustic background sound or fragments of your own prior speech, do NOT repeat it or answer your own question again. Always move forward in the conversation.
 3. **Vary your openings & reactions**: Rotate natural reactions dynamically (e.g. "Chà!", "Thú vị ghê!", "Hay quá!", "Đúng rồi đó!", "Để Doraemon nghĩ nào..."). Never start every turn with the same word.
+4. **ALWAYS Speak Aloud (Never Stay Silent)**: In every turn, you MUST speak aloud with warm audio. NEVER generate internal thoughts without speaking! If the child speaks quietly or you couldn't hear clearly, always respond warmly: "Aha! Doraemon chưa nghe rõ nè, bé nói lại cho Doraemon nghe với nha!"
 """
 
 # Block bổ sung cho Encyclopedia Mode — chèn vào system prompt ngay trước khi
