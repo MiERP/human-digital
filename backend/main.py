@@ -711,6 +711,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 try:
                     while True:
                         message = await websocket.receive()
+                        if message.get("type") == "websocket.disconnect":
+                            logger.info("Client sent websocket.disconnect.")
+                            break
                         if "bytes" in message and message["bytes"]:
                             audio_bytes = message["bytes"]
                             # Gửi audio stream vào Gemini Live API với types.Blob
