@@ -454,6 +454,65 @@ CURATED_KNOWLEDGE: Dict[str, Dict[str, any]] = {
         "key_figures": ["Lũng Cú", "Lung Cu", "Cột cờ Lũng Cú", "Hà Giang", "Cực Bắc Việt Nam"],
     },
 
+    "tinh_thanh_viet_nam": {
+        "vi": (
+            "Nước Cộng hòa Xã hội Chủ nghĩa Việt Nam hiện nay có tổng cộng 63 đơn vị hành chính cấp tỉnh, "
+            "gồm 58 tỉnh (như Hà Giang, Cà Mau, Nghệ An, Lâm Đồng...) và 5 thành phố trực thuộc Trung ương là: "
+            "Hà Nội (Thủ đô), Thành phố Hồ Chí Minh, Hải Phòng, Đà Nẵng và Cần Thơ."
+        ),
+        "en": (
+            "Vietnam is administratively divided into 63 province-level units: 58 provinces and 5 centrally-governed cities "
+            "(Hà Nội, Ho Chi Minh City, Hải Phòng, Đà Nẵng, and Cần Thơ)."
+        ),
+        "category": "geography",
+        "key_figures": [
+            "tỉnh thành việt nam", "bao nhiêu tỉnh thành", "bao nhiêu tỉnh thành phố", "63 tỉnh thành",
+            "bao nhiêu tỉnh", "tỉnh việt nam", "thành phố trực thuộc trung ương", "đơn vị hành chính việt nam",
+            "tinh thanh viet nam", "bao nhieu tinh thanh"
+        ],
+    },
+
+    "thu_do_viet_nam": {
+        "vi": (
+            "Thủ đô của nước Cộng hòa Xã hội Chủ nghĩa Việt Nam là thành phố Hà Nội — trung tâm chính trị, văn hóa và giáo dục "
+            "nghìn năm văn hiến của cả nước. Hà Nội nổi tiếng với Hồ Gươm, Lăng Bác Hồ, Văn Miếu - Quốc Tử Giám và 36 phố phường cổ kính."
+        ),
+        "en": (
+            "Hanoi is the historic capital city of Vietnam, renowned for Hoàn Kiếm Lake, the Old Quarter, and the Temple of Literature."
+        ),
+        "category": "geography",
+        "key_figures": ["thủ đô việt nam", "thủ đô của việt nam", "thu do viet nam", "hà nội thủ đô", "thủ đô nước ta"],
+    },
+
+    "dan_so_dien_tich_viet_nam": {
+        "vi": (
+            "Đất nước Việt Nam hình chữ S có diện tích tự nhiên khoảng 331.212 km² với đường bờ biển dài hơn 3.260 km. "
+            "Dân số Việt Nam hiện nay đạt mốc khoảng 100 triệu người, gồm 54 dân tộc anh em cùng chung sống đoàn kết, "
+            "trong đó người Kinh (người Việt) chiếm số lượng đông nhất."
+        ),
+        "en": (
+            "Vietnam has a land area of about 331,212 km² with a 3,260 km coastline. Its population is approximately 100 million people, comprising 54 distinct ethnic groups."
+        ),
+        "category": "geography",
+        "key_figures": [
+            "diện tích việt nam", "dân số việt nam", "dien tich viet nam", "dan so viet nam",
+            "54 dân tộc", "bao nhiêu dân tộc", "bờ biển việt nam", "đất nước việt nam"
+        ],
+    },
+
+    "3_mien_viet_nam": {
+        "vi": (
+            "Việt Nam được chia làm 3 miền chính: Miền Bắc (nổi tiếng với Thủ đô Hà Nội, vịnh Hạ Long, ruộng bậc thang Sa Pa), "
+            "Miền Trung (nổi tiếng với cố đô Huế, cầu Vàng Đà Nẵng, phố cổ Hội An) và Miền Nam (với Thành phố Hồ Chí Minh sầm uất "
+            "và miền Tây sông nước Cửu Long trù phú bạt ngàn cây trái)."
+        ),
+        "en": (
+            "Vietnam is geographically and culturally divided into 3 regions: Northern Vietnam, Central Vietnam, and Southern Vietnam."
+        ),
+        "category": "geography",
+        "key_figures": ["3 miền", "ba miền", "các miền việt nam", "miền bắc", "miền trung", "miền nam", "3 mien viet nam"],
+    },
+
     # ==================== 4. HỆ MẶT TRỜI & THIÊN VĂN VŨ TRỤ ====================
     "he_mat_troi": {
         "vi": (
@@ -788,7 +847,7 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
     """
     Tra cứu nhanh trong kho tri thức bách khoa viết tay:
     - So sánh cả có dấu và không dấu (case-insensitive).
-    - Tự động đối sánh thực thể danh từ chính.
+    - Tự động đối sánh thực thể danh từ chính (cả cụm từ và tập từ khóa).
     Returns: (entry_dict, key, source_title) hoặc None nếu không có.
     """
     if not query:
@@ -796,8 +855,9 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
 
     q_raw = query.strip().lower()
     q_norm = _strip_vietnamese_diacritics(q_raw)
+    q_words = set(q_norm.split())
 
-    # 1. Quét theo key_figures (chính xác nhất)
+    # 1. Quét theo key_figures (chính xác nhất: substring match)
     for key, entry in CURATED_KNOWLEDGE.items():
         figures = entry.get("key_figures", [])
         for fig in figures:
@@ -813,5 +873,14 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
             figures = entry.get("key_figures", [])
             title = figures[0] if figures else key_clean.title()
             return (entry, key, f"Doraemon Knowledge Base: {title}")
+
+    # 3. Quét theo tập từ khóa (Token Subset match) cho các cụm danh từ dài
+    for key, entry in CURATED_KNOWLEDGE.items():
+        figures = entry.get("key_figures", [])
+        for fig in figures:
+            fig_norm = _strip_vietnamese_diacritics(fig.lower())
+            fig_words = set(fig_norm.split())
+            if len(fig_words) >= 2 and fig_words.issubset(q_words):
+                return (entry, key, f"Doraemon Knowledge Base: {figures[0]}")
 
     return None

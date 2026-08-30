@@ -324,8 +324,8 @@ class KnowledgeSearchEngine:
         """Loại bỏ các từ hỏi tự nhiên và dấu câu để trích xuất thực thể chính cho Wikipedia / Search API."""
         q = query.strip()
         patterns = [
-            r"^(ai là|ai sinh ra|ai lập nên|ai sáng lập|kể về|kể cho em về|kể cho bé về|giải thích về|cho mình hỏi về|cho em hỏi về|đố doraemon biết|bạn có biết|bạn biết gì về|nguồn gốc của|lịch sử của|thông tin về)\s+",
-            r"\s+(là ai|ở đâu|vào năm nào|sinh năm bao nhiêu|như thế nào|tại sao|để làm gì|là gì|có gì đặc biệt)\s*[\?\!\.]*$",
+            r"^(ai là|ai sinh ra|ai lập nên|ai sáng lập|kể về|kể cho em về|kể cho bé về|giải thích về|giải thích|cho mình hỏi về|cho em hỏi về|đố doraemon biết|bạn có biết|bạn biết gì về|nguồn gốc của|lịch sử của|thông tin về|tìm hiểu về|hãy nói về|có bao nhiêu|bao nhiêu|việt nam có bao nhiêu|tại sao|vì sao)\s+",
+            r"\s+(là ai|ở đâu|vào năm nào|sinh năm bao nhiêu|như thế nào|tại sao|để làm gì|là gì|có gì đặc biệt|có bao nhiêu|gồm những gì|gồm những ai|gồm mấy loại|thế nào)\s*[\?\!\.]*$",
         ]
         cleaned = q
         for p in patterns:
