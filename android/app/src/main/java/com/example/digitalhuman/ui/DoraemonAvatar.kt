@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,8 +58,8 @@ fun DoraemonAvatar(
 
     // 1. Hiệu ứng lơ lửng bồng bềnh
     val floatOffset by infiniteTransition.animateFloat(
-        initialValue = -8f,
-        targetValue = 8f,
+        initialValue = -10f,
+        targetValue = 10f,
         animationSpec = infiniteRepeatable(
             animation = tween(if (isSleeping) 2800 else 2000, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -68,7 +69,7 @@ fun DoraemonAvatar(
 
     // 2. Hiệu ứng nhấp nháy hào quang (Aura Pulse)
     val auraPulse by infiniteTransition.animateFloat(
-        initialValue = 0.85f,
+        initialValue = 0.9f,
         targetValue = 1.15f,
         animationSpec = infiniteRepeatable(
             animation = tween(1200, easing = FastOutSlowInEasing),
@@ -79,9 +80,9 @@ fun DoraemonAvatar(
 
     // 3. Chọn Drawable phù hợp theo trạng thái, cảm xúc và khẩu hình âm thanh (Sprite Keyframes)
     val baseDrawableRes = getDoraemonDrawable(state, emotion)
-    val currentDrawableRes = if (isSpeaking && !isSleeping && baseDrawableRes == R.drawable.doraemon_idle) {
+    val currentDrawableRes = if (isSpeaking && !isSleeping) {
         when {
-            amplitude < 0.05f -> R.drawable.doraemon_idle
+            amplitude < 0.05f -> baseDrawableRes
             amplitude < 0.35f -> R.drawable.doraemon_speaking_half
             else -> R.drawable.doraemon_speaking
         }
@@ -94,22 +95,39 @@ fun DoraemonAvatar(
 
     Box(
         modifier = modifier
-            .size(300.dp)
-            .offset { IntOffset(0, floatOffset.toInt()) },
+            .size(280.dp),
         contentAlignment = Alignment.Center
     ) {
+        // Bóng đổ mờ hoạt hình dưới chân Doraemon
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .offset(y = (-10).dp)
+                .size(width = 160.dp, height = 24.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.15f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+
         // Hào quang tỏa sáng phía sau Doraemon
         if (auraColor != null) {
             Box(
                 modifier = Modifier
-                    .size(240.dp * auraPulse)
+                    .size(230.dp * auraPulse)
+                    .offset { IntOffset(0, floatOffset.toInt()) }
                     .clip(CircleShape)
-                    .blur(36.dp)
+                    .blur(32.dp)
                     .drawBehind {
                         drawCircle(
                             brush = Brush.radialGradient(
                                 colors = listOf(
-                                    auraColor.copy(alpha = if (isSpeaking) 0.45f else 0.25f),
+                                    auraColor.copy(alpha = if (isSpeaking) 0.5f else 0.3f),
                                     Color.Transparent
                                 )
                             )
@@ -121,7 +139,10 @@ fun DoraemonAvatar(
         // Hình ảnh Doraemon 2D Anime sắc nét chuẩn Sprite Animation
         Crossfade(
             targetState = currentDrawableRes,
-            animationSpec = tween(durationMillis = if (isSpeaking) 80 else 300),
+            animationSpec = tween(durationMillis = if (isSpeaking) 80 else 250),
+            modifier = Modifier
+                .fillMaxSize()
+                .offset { IntOffset(0, floatOffset.toInt()) },
             label = "doraemon_crossfade"
         ) { drawableId ->
             Image(

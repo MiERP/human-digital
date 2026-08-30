@@ -63,4 +63,14 @@ dependencies {
 
     // On-device Voice Activity Detection (Silero VAD)
     implementation("com.github.gkonovalov.android-vad:silero:2.0.10")
+
+    // CameraX (Mắt Thần Doraemon)
+    val cameraVersion = "1.3.4"
+    implementation("androidx.camera:camera-core:$cameraVersion")
+    implementation("androidx.camera:camera-camera2:$cameraVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraVersion")
+    implementation("androidx.camera:camera-view:$cameraVersion")
+
+    // Google ML Kit Face Detection (Đôi Mắt Cảm Xúc Edge AI)
+    implementation("com.google.android.gms:play-services-mlkit-face-detection:17.1.0")
 }

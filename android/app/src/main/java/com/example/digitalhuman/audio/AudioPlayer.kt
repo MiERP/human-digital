@@ -29,15 +29,21 @@ class AudioPlayer(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
-        // Pre-buffer mục tiêu ~150ms audio trước khi phát để chống rách tiếng do jitter mạng.
+        // Pre-buffer mục tiêu ~80ms audio trước khi phát để chống rách tiếng mà vẫn đảm bảo phản hồi tức thì.
         private const val BYTES_PER_SECOND = SAMPLE_RATE * 2
-        private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 150 / 1000
+        private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 80 / 1000
 
-        // Không chờ pre-buffer quá lâu để giữ độ trễ hội thoại ở mức thấp.
-        private const val MAX_PREBUFFER_WAIT_MS = 250L
+        // Timeout pre-buffer ngắn để giảm độ trễ khởi đầu giọng nói.
+        private const val MAX_PREBUFFER_WAIT_MS = 120L
 
-        // Khuếch đại âm lượng phát lại (giọng Gemini có biên độ thấp).
-        private const val VOLUME_GAIN = 1.5f
+        // Khoảng lặng để xả sạch buffer khi Gemini đang tạm dừng giữa câu (~200ms).
+        private const val SILENT_CYCLES_TO_FINISH = 20
+
+        // Khi server đã báo turn_complete, chỉ cần chờ ~80ms (8 cycles) để xả nốt phần cứng rồi mở mic ngay.
+        private const val SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE = 8
+
+        // Khuếch đại âm lượng phát lại: 2.0x để giọng Doraemon phát ra loa ngoài to rõ, trong trẻo.
+        private const val VOLUME_GAIN = 2.0f
     }
 
     private var audioTrack: AudioTrack? = null
@@ -50,8 +56,14 @@ class AudioPlayer(
     var isCurrentlyPlayingAudio = false
         private set
 
+    val isPlayingOrPending: Boolean
+        get() = isCurrentlyPlayingAudio || pendingBytes.get() > 0 || audioQueue.isNotEmpty()
+
     @Volatile
     private var isPreBuffering = true
+
+    @Volatile
+    private var isServerTurnComplete = false
 
     private val pendingBytes = AtomicInteger(0)
 
@@ -78,6 +90,7 @@ class AudioPlayer(
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
 
+        audioTrack?.setVolume(AudioTrack.getMaxVolume())
         audioTrack?.play()
         isPlaying = true
 
@@ -115,9 +128,16 @@ class AudioPlayer(
                     onOutputAmplitude(0f)
                     if (isCurrentlyPlayingAudio) {
                         silentCycles++
-                        // Sau ~100ms không có thêm audio chunk mới -> Hoàn tất phát lượt
-                        if (silentCycles > 10) {
+                        // Nếu server đã báo turn_complete thì chỉ cần xả nhanh (SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE = 80ms)
+                        // Nếu đang stream dở thì đợi 200ms để tránh ngắt giữa câu.
+                        val finishThreshold = if (isServerTurnComplete) {
+                            SHORT_SILENT_CYCLES_AFTER_TURN_COMPLETE
+                        } else {
+                            SILENT_CYCLES_TO_FINISH
+                        }
+                        if (silentCycles > finishThreshold) {
                             isCurrentlyPlayingAudio = false
+                            isServerTurnComplete = false
                             onPlaybackStateChanged(false)
                             silentCycles = 0
                             isPreBuffering = true
@@ -131,8 +151,25 @@ class AudioPlayer(
     }
 
     fun enqueueAudio(data: ByteArray) {
+        isServerTurnComplete = false
         audioQueue.add(data)
         pendingBytes.addAndGet(data.size)
+        if (!isCurrentlyPlayingAudio) {
+            isCurrentlyPlayingAudio = true
+            onPlaybackStateChanged(true)
+        }
+    }
+
+    /**
+     * Báo cho player biết server đã kết thúc turn nói hiện tại (turn_complete).
+     * Player sẽ chủ động xả nốt hàng đợi và mở mic tức thì ngay khi phát xong frame cuối.
+     */
+    fun notifyTurnComplete() {
+        isServerTurnComplete = true
+        // Nếu hàng đợi đã rỗng hoàn toàn từ trước, mở mic ngay sau một nhịp ngắn
+        if (audioQueue.isEmpty() && pendingBytes.get() == 0 && !isCurrentlyPlayingAudio) {
+            onPlaybackStateChanged(false)
+        }
     }
 
     /**
@@ -143,6 +180,7 @@ class AudioPlayer(
             audioQueue.clear()
             pendingBytes.set(0)
             isPreBuffering = true
+            isServerTurnComplete = false
             try {
                 audioTrack?.pause()
                 audioTrack?.flush()
@@ -195,7 +233,10 @@ class AudioPlayer(
             sum += normalized * normalized
         }
         val rms = sqrt(sum / shortCount).toFloat()
-        return (rms * 3.5f).coerceIn(0.0f, 1.0f)
+        // Map biên độ thật ra thang 0..1 mà KHÔNG kẹp cứng. Giọng Gemini bình thường
+        // RMS ~0.05-0.15, đỉnh ~0.3-0.4, nên nhân 4 để dùng được dải động rộng hơn
+        // cho lip-sync (trước đây nhân 3.5 + clamp 1.0 làm mép dính ở max).
+        return (rms * 4.0f).coerceIn(0.0f, 1.0f)
     }
 }
 

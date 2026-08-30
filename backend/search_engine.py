@@ -90,6 +90,15 @@ class KnowledgeSearchEngine:
         "https://simple.wikipedia.org/w/api.php?action=opensearch"
         "&format=json&limit=5&search={query}"
     )
+    WIKI_VI_SUMMARY_URL = "https://vi.wikipedia.org/api/rest_v1/page/summary/{title}"
+    WIKI_VI_SEARCH_URL = (
+        "https://vi.wikipedia.org/w/api.php?action=opensearch"
+        "&format=json&limit=5&search={query}"
+    )
+    USER_AGENT = (
+        "DoraemonKidEducationBot/2.0 (Educational AI Tutor for Kids; "
+        "contact: admin@human-digital.local)"
+    )
 
     def __init__(self):
         self.cse_id = os.getenv("GOOGLE_CSE_ID", "").strip()
@@ -329,9 +338,9 @@ class KnowledgeSearchEngine:
         }
         url = f"{self.CSE_ENDPOINT}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(
-            url, headers={"User-Agent": "DoraemonEnglishBuddy/1.0 (educational)"}
+            url, headers={"User-Agent": self.USER_AGENT}
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         items = data.get("items", []) or []
@@ -351,54 +360,139 @@ class KnowledgeSearchEngine:
             )
         return results
 
+    def _is_vietnamese(self, text: str) -> bool:
+        vn_chars = "àáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ"
+        return any(c in vn_chars for c in text.lower())
+
     def _search_wikipedia(
         self, query: str, top_k: int, topic_hint: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Simple English Wikipedia opensearch → REST summary for each title.
-        Returns up to top_k results. topic_hint biases the opensearch query.
+        Wikipedia multi-tier search:
+        1. If Vietnamese, try vi.wikipedia.org (Opensearch -> Fulltext search).
+        2. Try Simple English Wikipedia (Opensearch -> Fulltext search).
+        3. Try English Wikipedia (Opensearch -> Fulltext search).
         """
-        search_url = self.WIKI_SEARCH_URL.format(
-            query=urllib.parse.quote(self._apply_topic_hint(query, topic_hint))
-        )
-        req = urllib.request.Request(
-            search_url,
-            headers={"User-Agent": "DoraemonEnglishBuddy/1.0 (educational)"},
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        # opensearch format: [query, [titles], [descriptions], [urls]]
-        titles: List[str] = data[1] if len(data) >= 2 else []
+        clean_query = query.strip()
+        is_vn = self._is_vietnamese(clean_query)
 
+        # 1. Tiếng Việt (nếu có dấu hoặc từ tiếng Việt)
+        if is_vn:
+            results = self._fetch_wiki_combined(
+                query=clean_query,
+                lang="vi",
+                source_name="Wikipedia (Tiếng Việt)",
+                top_k=top_k,
+            )
+            if results:
+                return results
+
+        # 2. Simple English Wikipedia
+        results = self._fetch_wiki_combined(
+            query=clean_query,
+            lang="simple",
+            source_name="Wikipedia (Simple English)",
+            top_k=top_k,
+        )
+        if results:
+            return results
+
+        # 3. Standard English Wikipedia fallback
+        results = self._fetch_wiki_combined(
+            query=clean_query,
+            lang="en",
+            source_name="Wikipedia (English)",
+            top_k=top_k,
+        )
+        return results
+
+    def _fetch_wiki_combined(
+        self,
+        query: str,
+        lang: str,
+        source_name: str,
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Kết hợp OpenSearch (tìm theo tiêu đề bài viết) và Full-text Search (tìm theo nội dung).
+        """
+        titles: List[str] = []
+
+        # Bước 1: OpenSearch (Nhanh và chính xác nhất cho danh từ/thực thể)
+        try:
+            opensearch_url = (
+                f"https://{lang}.wikipedia.org/w/api.php?action=opensearch"
+                f"&format=json&limit=5&search={urllib.parse.quote(query)}"
+            )
+            req = urllib.request.Request(
+                opensearch_url,
+                headers={"User-Agent": self.USER_AGENT},
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if len(data) >= 2 and data[1]:
+                titles.extend(data[1])
+        except Exception as e:
+            logger.debug(f"Opensearch failed for '{query}' on {lang}.wikipedia: {e}")
+
+        # Bước 2: Nếu OpenSearch không có kết quả -> Full-text search (list=search)
+        if not titles:
+            try:
+                ft_url = (
+                    f"https://{lang}.wikipedia.org/w/api.php?action=query"
+                    f"&list=search&format=json&srlimit=5&srsearch={urllib.parse.quote(query)}"
+                )
+                req = urllib.request.Request(
+                    ft_url,
+                    headers={"User-Agent": self.USER_AGENT},
+                )
+                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                search_items = data.get("query", {}).get("search", []) or []
+                for item in search_items:
+                    t = item.get("title")
+                    if t and t not in titles:
+                        titles.append(t)
+            except Exception as e:
+                logger.debug(f"Fulltext search failed for '{query}' on {lang}.wikipedia: {e}")
+
+        if not titles:
+            return []
+
+        # Bước 3: Lấy tóm tắt (Summary) từ REST API
         results: List[Dict[str, Any]] = []
+        base_wiki_url = f"https://{lang}.wikipedia.org/wiki/"
+        summary_endpoint = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{{title}}"
+
         for idx, title in enumerate(titles, start=1):
             if len(results) >= top_k:
                 break
-            summary = self._wikipedia_summary(title)
+            summary = self._wikipedia_summary(title, summary_endpoint)
             if not summary:
                 continue
             results.append(
                 {
                     "title": title,
                     "snippet": summary,
-                    "source": "Wikipedia (Simple English)",
-                    "source_url": (
-                        f"https://simple.wikipedia.org/wiki/{urllib.parse.quote(title)}"
-                    ),
+                    "source": source_name,
+                    "source_url": f"{base_wiki_url}{urllib.parse.quote(title)}",
                     "rank": idx,
                 }
             )
         return results
 
-    def _wikipedia_summary(self, title: str) -> Optional[str]:
+    def _wikipedia_summary(
+        self, title: str, summary_endpoint: Optional[str] = None
+    ) -> Optional[str]:
         """Fetch plain-text extract for a Wikipedia title, truncate to MAX_SNIPPET_CHARS."""
         try:
-            url = self.WIKI_SUMMARY_URL.format(title=urllib.parse.quote(title))
+            endpoint = summary_endpoint or self.WIKI_SUMMARY_URL
+            url = endpoint.format(title=urllib.parse.quote(title))
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "DoraemonEnglishBuddy/1.0 (educational)"},
+                headers={"User-Agent": self.USER_AGENT},
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             extract = (data.get("extract") or "").strip()
             if not extract:

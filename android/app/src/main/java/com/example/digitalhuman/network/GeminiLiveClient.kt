@@ -36,12 +36,15 @@ data class RobotEmotion(
 class GeminiLiveClient(
     private val serverUrl: String,
     private val childId: String,
+    private val apiKey: String? = null,
     private val onAudioReceived: (ByteArray) -> Unit,
     private val onStateChanged: (ConnectionState) -> Unit,
     private val onInterrupted: () -> Unit,
     private val onEmotionChanged: ((RobotEmotion) -> Unit)? = null,
     private val onSessionEnded: (() -> Unit)? = null,
-    private val onClarificationRequest: ((question: String, options: List<String>) -> Unit)? = null
+    private val onTurnComplete: (() -> Unit)? = null,
+    private val onClarificationRequest: ((question: String, options: List<String>) -> Unit)? = null,
+    private val onLearningCue: ((topic: String, masteredWords: List<String>, needsPractice: List<String>) -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "GeminiLiveClient"
@@ -76,16 +79,16 @@ class GeminiLiveClient(
             .pingInterval(10, TimeUnit.SECONDS)
             .build()
 
-        // Attach child_id as a query parameter so each child gets their own
-        // Robo (separate memory, progress, and search cache on the backend).
-        // OkHttp's HttpUrl only accepts http/https; ws:// maps to http:// (and
-        // wss:// to https://) for WebSocket upgrade handshakes.
+        // Attach child_id và api_key (nếu có) as query parameters
         val httpUrl = serverUrl
             .replaceFirst("ws://", "http://")
             .replaceFirst("wss://", "https://")
-        val url: HttpUrl = httpUrl.toHttpUrl().newBuilder()
+        val urlBuilder = httpUrl.toHttpUrl().newBuilder()
             .addQueryParameter("child_id", childId)
-            .build()
+        if (!apiKey.isNullOrBlank()) {
+            urlBuilder.addQueryParameter("api_key", apiKey.trim())
+        }
+        val url: HttpUrl = urlBuilder.build()
 
         val request = Request.Builder()
             .url(url)
@@ -124,15 +127,22 @@ class GeminiLiveClient(
                             }
                             "turn_complete" -> {
                                 Log.d(TAG, "Gemini turn_complete received.")
-                                updateState(ConnectionState.LISTENING)
+                                onTurnComplete?.invoke()
+                                if (currentState != ConnectionState.SPEAKING && currentState != ConnectionState.SLEEPING) {
+                                    updateState(ConnectionState.LISTENING)
+                                }
                             }
                             "interrupted" -> {
                                 Log.d(TAG, "Gemini turn interrupted by user.")
+                                updateState(ConnectionState.LISTENING)
                                 onInterrupted()
                             }
                             "waiting_for_input" -> {
                                 Log.d(TAG, "Gemini waiting_for_input received.")
-                                updateState(ConnectionState.LISTENING)
+                                onTurnComplete?.invoke()
+                                if (currentState != ConnectionState.SPEAKING && currentState != ConnectionState.SLEEPING) {
+                                    updateState(ConnectionState.LISTENING)
+                                }
                             }
                             "input_transcription", "output_transcription" -> {
                                 val text = json.optString("text", "")
@@ -155,6 +165,19 @@ class GeminiLiveClient(
                                     "clarification_request: q='$question' options=$options"
                                 )
                                 onClarificationRequest?.invoke(question, options)
+                            }
+                            "learning_cue" -> {
+                                val topic = json.optString("topic", "General")
+                                val masteredArr = json.optJSONArray("mastered_words")
+                                val mastered: List<String> = if (masteredArr != null) {
+                                    (0 until masteredArr.length()).mapNotNull { i -> masteredArr.optString(i, null) }
+                                } else emptyList()
+                                val practiceArr = json.optJSONArray("needs_practice")
+                                val practice: List<String> = if (practiceArr != null) {
+                                    (0 until practiceArr.length()).mapNotNull { i -> practiceArr.optString(i, null) }
+                                } else emptyList()
+                                Log.d(TAG, "learning_cue: topic=$topic mastered=$mastered practice=$practice")
+                                onLearningCue?.invoke(topic, mastered, practice)
                             }
                         }
                     } else if (json.has("status") && json.getString("status") == "ready") {
@@ -266,6 +289,74 @@ class GeminiLiveClient(
             Log.d(TAG, "Sent clarification_response: $choice")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send clarification_response: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Bé chọn một thẻ chủ đề khám phá từ Chiếc Túi Thần Kỳ.
+     * Gửi prompt_hint lên server để Doraemon cất lời chào mở màn ngay lập tức.
+     */
+    fun selectTopic(topicTitle: String, promptHint: String) {
+        val ws = webSocket
+        if (ws == null) {
+            Log.w(TAG, "selectTopic: webSocket is null, dropping.")
+            return
+        }
+        if (currentState == ConnectionState.DISCONNECTED || currentState == ConnectionState.ERROR) {
+            Log.w(TAG, "selectTopic: state=$currentState, dropping.")
+            return
+        }
+        try {
+            val payload = JSONObject()
+                .put("action", "select_topic")
+                .put("title", topicTitle)
+                .put("prompt_hint", promptHint)
+            ws.send(payload.toString())
+            Log.i(TAG, "Sent select_topic: $topicTitle")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send select_topic: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Gửi khung hình JPEG từ Camera của bé ("Mắt Thần Doraemon") lên server.
+     * Backend sẽ chuyển tiếp vào session.send_realtime_input(video=Blob(image/jpeg)).
+     */
+    fun sendVideoFrame(jpegBytes: ByteArray) {
+        val ws = webSocket
+        if (ws == null || currentState == ConnectionState.DISCONNECTED || currentState == ConnectionState.ERROR) {
+            return
+        }
+        try {
+            val base64Data = android.util.Base64.encodeToString(jpegBytes, android.util.Base64.NO_WRAP)
+            val payload = JSONObject()
+                .put("action", "video_frame")
+                .put("data", base64Data)
+            ws.send(payload.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Lỗi gửi video frame: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Gửi nhãn cảm xúc của bé nhận diện từ Edge AI (Google ML Kit Face Detection) lên server.
+     * Backend sẽ cập nhật ngữ cảnh hội thoại cho Gemini Live để phản hồi thấu cảm.
+     */
+    fun sendChildEmotion(emotion: String, confidence: Float = 1.0f) {
+        val ws = webSocket
+        if (ws == null || currentState == ConnectionState.DISCONNECTED || currentState == ConnectionState.ERROR) {
+            return
+        }
+        try {
+            val payload = JSONObject()
+                .put("action", "child_emotion")
+                .put("emotion", emotion)
+                .put("confidence", confidence.toDouble())
+                .put("timestamp", System.currentTimeMillis())
+            ws.send(payload.toString())
+            Log.d(TAG, "Sent child_emotion: $emotion (confidence=$confidence)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Lỗi gửi child_emotion: ${e.message}", e)
         }
     }
 

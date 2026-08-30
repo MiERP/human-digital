@@ -3,35 +3,130 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cấu hình cá nhân hóa Doraemon cho bé</title>
+    <title>Doraemon AI Tutor — Trung tâm Phụ huynh & Báo cáo</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
-    <div class="max-w-2xl mx-auto">
-        <header class="text-center mb-8">
-            <h1 class="text-2xl md:text-3xl font-black tracking-wide text-cyan-400">🤖 Cấu hình Doraemon cho bé</h1>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-4 md:p-6 font-sans">
+    <div class="max-w-3xl mx-auto">
+        <header class="text-center mb-6">
+            <h1 class="text-2xl md:text-3xl font-black tracking-wide text-cyan-400">🤖 Trung Tâm Phụ Huynh Doraemon</h1>
             <p class="text-slate-400 text-sm mt-2">
-                Phụ huynh điền hồ sơ để Doraemon hiểu tên, tuổi, sở thích và tính cách của bé.
-                Mỗi bé dùng một <span class="text-cyan-300 font-semibold">Mã bé (child_id)</span> riêng.
+                Quản lý hồ sơ cá nhân hóa và theo dõi tiến trình học tập, phản xạ tiếng Anh của bé.
             </p>
         </header>
 
-        <div class="bg-slate-800/70 border border-slate-700 rounded-2xl p-6 space-y-5">
-            <!-- Kết nối / xác thực -->
+        <!-- Thanh nhập mã bé & Khóa quản trị chung -->
+        <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 mb-6 shadow-md">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-sm font-semibold text-slate-300 mb-1">Mã bé (child_id) *</label>
-                    <input id="childId" type="text" placeholder="vd: be_minh, be_an" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-                    <p class="text-xs text-slate-500 mt-1">Chỉ dùng chữ cái, số, dấu gạch. Phải khớp với app trên điện thoại.</p>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Mã bé (child_id) *</label>
+                    <input id="childId" type="text" placeholder="vd: be_minh, be_an, default_child" value="default_child" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-cyan-300 font-medium" />
                 </div>
                 <div>
-                    <label class="block text-sm font-semibold text-slate-300 mb-1">Khóa quản trị (ADMIN_API_KEY) *</label>
-                    <input id="adminKey" type="password" placeholder="Nhập ADMIN_API_KEY" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+                    <label class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Khóa quản trị (ADMIN_API_KEY)</label>
+                    <input id="adminKey" type="password" placeholder="Nhập ADMIN_API_KEY để sửa hồ sơ" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200" />
+                </div>
+            </div>
+            <div class="flex justify-end mt-3 gap-2">
+                <button id="refreshBtn" class="px-4 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center gap-1.5">
+                    🔄 Tải Dữ Liệu Bé
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab chuyển đổi giữa Dashboard và Cấu hình -->
+        <div class="flex border-b border-slate-700 mb-6 space-x-2">
+            <button id="tabDashboardBtn" class="px-4 py-2 text-sm font-bold border-b-2 border-cyan-400 text-cyan-300 transition">
+                📊 Báo Cáo Tiến Bộ & Huy Hiệu
+            </button>
+            <button id="tabConfigBtn" class="px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition">
+                ⚙️ Cấu Hình Hồ Sơ Cá Nhân Hóa
+            </button>
+        </div>
+
+        <!-- 1. TAB DASHBOARD (BÁO CÁO PHỤ HUYNH) -->
+        <div id="dashboardSection" class="space-y-6">
+            <!-- Thẻ thống kê tổng quan (Streak, Số buổi, Từ vựng) -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div class="bg-gradient-to-br from-amber-500/20 to-amber-600/10 border border-amber-500/30 rounded-2xl p-4 text-center">
+                    <div class="text-2xl mb-1">🔥</div>
+                    <div id="statStreak" class="text-2xl font-black text-amber-400">0 ngày</div>
+                    <div class="text-xs text-amber-200/80 font-medium">Chuỗi ngày học</div>
+                </div>
+                <div class="bg-gradient-to-br from-cyan-500/20 to-cyan-600/10 border border-cyan-500/30 rounded-2xl p-4 text-center">
+                    <div class="text-2xl mb-1">💬</div>
+                    <div id="statSessions" class="text-2xl font-black text-cyan-400">0</div>
+                    <div class="text-xs text-cyan-200/80 font-medium">Buổi trò chuyện</div>
+                </div>
+                <div class="bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border border-emerald-500/30 rounded-2xl p-4 text-center">
+                    <div class="text-2xl mb-1">⭐</div>
+                    <div id="statWords" class="text-2xl font-black text-emerald-400">0</div>
+                    <div class="text-xs text-emerald-200/80 font-medium">Từ vựng làm chủ</div>
+                </div>
+                <div class="bg-gradient-to-br from-purple-500/20 to-purple-600/10 border border-purple-500/30 rounded-2xl p-4 text-center">
+                    <div class="text-2xl mb-1">⏱️</div>
+                    <div id="statDuration" class="text-2xl font-black text-purple-400">0 phút</div>
+                    <div class="text-xs text-purple-200/80 font-medium">Tổng thời lượng</div>
                 </div>
             </div>
 
-            <div class="border-t border-slate-700"></div>
+            <!-- Lời khuyên sư phạm cho phụ huynh -->
+            <div class="bg-slate-800/80 border border-cyan-500/30 rounded-2xl p-5 shadow-lg">
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl">💡</span>
+                    <div>
+                        <h3 class="text-sm font-bold text-cyan-300 uppercase tracking-wider">Lời khuyên sư phạm cho cha mẹ</h3>
+                        <p id="pedagogicalAdvice" class="text-sm text-slate-300 mt-1 leading-relaxed">
+                            Đang phân tích dữ liệu học tập của bé...
+                        </p>
+                    </div>
+                </div>
+            </div>
 
+            <!-- Huy hiệu Bảo bối Doraemon đã mở khóa -->
+            <div class="bg-slate-800/70 border border-slate-700 rounded-2xl p-5">
+                <h2 class="text-base font-bold text-cyan-300 mb-3 flex items-center gap-2">
+                    <span>🏅</span> Bộ Sưu Tập Huy Hiệu Bảo Bối
+                </h2>
+                <div id="badgesContainer" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    <!-- Badges render ở đây -->
+                </div>
+            </div>
+
+            <!-- Danh sách từ vựng tiếng Anh bé đã làm chủ & cần ôn -->
+            <div class="bg-slate-800/70 border border-slate-700 rounded-2xl p-5">
+                <h2 class="text-base font-bold text-cyan-300 mb-3 flex items-center gap-2">
+                    <span>📚</span> Nhật Ký Từ Vựng Tiếng Anh
+                </h2>
+                <div class="space-y-3">
+                    <div>
+                        <div class="text-xs font-semibold text-emerald-400 uppercase mb-1.5">🌟 Từ vựng bé đã phát âm & sử dụng tốt:</div>
+                        <div id="masteredWordsList" class="flex flex-wrap gap-2">
+                            <span class="text-xs text-slate-500 italic">Chưa có từ vựng nào được ghi nhận.</span>
+                        </div>
+                    </div>
+                    <div class="pt-2 border-t border-slate-700/60">
+                        <div class="text-xs font-semibold text-amber-400 uppercase mb-1.5">🎯 Từ vựng Doraemon đang đồng hành ôn luyện:</div>
+                        <div id="needsPracticeList" class="flex flex-wrap gap-2">
+                            <span class="text-xs text-slate-500 italic">Chưa có từ vựng cần ôn tập.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Nhật ký các buổi trò chuyện gần nhất -->
+            <div class="bg-slate-800/70 border border-slate-700 rounded-2xl p-5">
+                <h2 class="text-base font-bold text-cyan-300 mb-3 flex items-center gap-2">
+                    <span>📝</span> Nhật Ký Buổi Học Gần Đây
+                </h2>
+                <div id="recentSessionsList" class="space-y-2.5">
+                    <p class="text-xs text-slate-500 italic">Chưa có nhật ký buổi học nào.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. TAB CẤU HÌNH HỒ SƠ -->
+        <div id="configSection" class="hidden bg-slate-800/70 border border-slate-700 rounded-2xl p-6 space-y-5">
             <!-- Thông tin cơ bản -->
             <div>
                 <h2 class="text-lg font-bold text-cyan-300 mb-3">Thông tin cơ bản</h2>
@@ -133,20 +228,137 @@
     </div>
 
     <script>
-        async function loadProfile() {
-            const childId = document.getElementById('childId').value.trim();
-            const adminKey = document.getElementById('adminKey').value.trim();
-            if (!childId || !adminKey) return;
+        // Quản lý Tabs
+        const tabDashboardBtn = document.getElementById('tabDashboardBtn');
+        const tabConfigBtn = document.getElementById('tabConfigBtn');
+        const dashboardSection = document.getElementById('dashboardSection');
+        const configSection = document.getElementById('configSection');
 
+        tabDashboardBtn.addEventListener('click', () => {
+            tabDashboardBtn.className = "px-4 py-2 text-sm font-bold border-b-2 border-cyan-400 text-cyan-300 transition";
+            tabConfigBtn.className = "px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition";
+            dashboardSection.classList.remove('hidden');
+            configSection.classList.add('hidden');
+        });
+
+        tabConfigBtn.addEventListener('click', () => {
+            tabConfigBtn.className = "px-4 py-2 text-sm font-bold border-b-2 border-cyan-400 text-cyan-300 transition";
+            tabDashboardBtn.className = "px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition";
+            configSection.classList.remove('hidden');
+            dashboardSection.classList.add('hidden');
+        });
+
+        async function loadData() {
+            const childId = document.getElementById('childId').value.trim() || 'default_child';
+            const adminKey = document.getElementById('adminKey').value.trim();
+
+            // 1. Tải Báo cáo Tiến độ (Dashboard)
             try {
-                const resp = await fetch(`/api/child/profile?child_id=${encodeURIComponent(childId)}`, {
-                    headers: { 'X-Admin-Key': adminKey }
-                });
-                if (!resp.ok) return;
-                const data = await resp.json();
-                fillForm(data);
+                const resp = await fetch(`/api/child/digest?child_id=${encodeURIComponent(childId)}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    renderDashboard(data);
+                }
             } catch (e) {
-                console.warn('Không thể tải hồ sơ hiện tại:', e);
+                console.warn('Lỗi tải digest:', e);
+            }
+
+            // 2. Tải Hồ sơ (nếu có key hoặc endpoint khả dụng)
+            if (adminKey) {
+                try {
+                    const resp = await fetch(`/api/child/profile?child_id=${encodeURIComponent(childId)}`, {
+                        headers: { 'X-Admin-Key': adminKey }
+                    });
+                    if (resp.ok) {
+                        const profile = await resp.json();
+                        fillForm(profile);
+                    }
+                } catch (e) {
+                    console.warn('Lỗi tải profile:', e);
+                }
+            }
+        }
+
+        function renderDashboard(d) {
+            document.getElementById('statStreak').textContent = `${d.streak_days || 0} ngày`;
+            document.getElementById('statSessions').textContent = d.total_sessions || 0;
+            document.getElementById('statWords').textContent = d.mastered_words_count || 0;
+            document.getElementById('statDuration').textContent = `${d.total_duration_minutes || 0} phút`;
+            document.getElementById('pedagogicalAdvice').textContent = d.pedagogical_advice || '';
+
+            // Render Badges
+            const badgesBox = document.getElementById('badgesContainer');
+            badgesBox.innerHTML = '';
+            if (d.badges && d.badges.length > 0) {
+                d.badges.forEach(b => {
+                    const card = document.createElement('div');
+                    const isUnlocked = b.unlocked;
+                    card.className = `p-3 rounded-xl border flex items-start gap-2.5 transition ${
+                        isUnlocked 
+                            ? 'bg-gradient-to-br from-cyan-900/40 to-slate-800 border-cyan-500/50 shadow-md shadow-cyan-900/30' 
+                            : 'bg-slate-800/30 border-slate-700/50 opacity-40 grayscale'
+                    }`;
+                    card.innerHTML = `
+                        <div class="text-2xl">${b.icon || '🏅'}</div>
+                        <div>
+                            <div class="text-xs font-bold ${isUnlocked ? 'text-cyan-300' : 'text-slate-400'}">${b.name}</div>
+                            <div class="text-[11px] text-slate-400 mt-0.5">${b.desc}</div>
+                            <div class="text-[10px] mt-1 font-semibold ${isUnlocked ? 'text-emerald-400' : 'text-slate-500'}">
+                                ${isUnlocked ? '✓ Đã mở khóa' : '🔒 Chưa mở'}
+                            </div>
+                        </div>
+                    `;
+                    badgesBox.appendChild(card);
+                });
+            }
+
+            // Render Mastered Words
+            const masteredBox = document.getElementById('masteredWordsList');
+            masteredBox.innerHTML = '';
+            if (d.mastered_words && d.mastered_words.length > 0) {
+                d.mastered_words.forEach(w => {
+                    const chip = document.createElement('span');
+                    chip.className = 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-600/40';
+                    chip.textContent = w;
+                    masteredBox.appendChild(chip);
+                });
+            } else {
+                masteredBox.innerHTML = '<span class="text-xs text-slate-500 italic">Chưa có từ vựng nào. Hãy cùng bé trò chuyện tiếng Anh với Doraemon nhé!</span>';
+            }
+
+            // Render Needs Practice Words
+            const practiceBox = document.getElementById('needsPracticeList');
+            practiceBox.innerHTML = '';
+            if (d.needs_practice && d.needs_practice.length > 0) {
+                d.needs_practice.forEach(w => {
+                    const chip = document.createElement('span');
+                    chip.className = 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-950/80 text-amber-300 border border-amber-600/40';
+                    chip.textContent = w;
+                    practiceBox.appendChild(chip);
+                });
+            } else {
+                practiceBox.innerHTML = '<span class="text-xs text-slate-500 italic">Bé đang làm rất tốt!</span>';
+            }
+
+            // Render Recent Sessions
+            const sessionsBox = document.getElementById('recentSessionsList');
+            sessionsBox.innerHTML = '';
+            if (d.recent_sessions && d.recent_sessions.length > 0) {
+                d.recent_sessions.forEach(s => {
+                    const row = document.createElement('div');
+                    row.className = 'p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 text-xs';
+                    const durationMin = Math.round((s.duration_seconds || 0) / 60);
+                    row.innerHTML = `
+                        <div class="flex justify-between text-slate-400 mb-1">
+                            <span class="font-medium text-cyan-400">${s.created_at || 'Gần đây'}</span>
+                            <span>⏱️ ${durationMin > 0 ? durationMin + ' phút' : s.duration_seconds + ' giây'}</span>
+                        </div>
+                        <div class="text-slate-200">${s.summary || 'Buổi trò chuyện vui vẻ cùng Doraemon.'}</div>
+                    `;
+                    sessionsBox.appendChild(row);
+                });
+            } else {
+                sessionsBox.innerHTML = '<span class="text-xs text-slate-500 italic">Chưa có buổi học nào.</span>';
             }
         }
 
@@ -180,8 +392,9 @@
             }
         }
 
-        document.getElementById('childId').addEventListener('blur', loadProfile);
-        document.getElementById('adminKey').addEventListener('blur', loadProfile);
+        document.getElementById('refreshBtn').addEventListener('click', loadData);
+        document.getElementById('childId').addEventListener('blur', loadData);
+        document.getElementById('adminKey').addEventListener('blur', loadData);
 
         document.getElementById('saveBtn').addEventListener('click', async () => {
             const childId = document.getElementById('childId').value.trim();
@@ -236,6 +449,7 @@
                 const data = await resp.json();
                 if (resp.ok) {
                     showResult(true, `Đã lưu hồ sơ cho "${childId}". Doraemon giờ sẽ hiểu tên, tuổi, sở thích và tính cách của bé.`);
+                    loadData();
                 } else {
                     showResult(false, 'Lỗi: ' + (data.detail || 'Không thể lưu hồ sơ.'));
                 }
@@ -243,6 +457,9 @@
                 showResult(false, 'Lỗi kết nối: ' + e.message);
             }
         });
+
+        // Tự động load dữ liệu ban đầu
+        window.addEventListener('DOMContentLoaded', loadData);
     </script>
 </body>
 </html>

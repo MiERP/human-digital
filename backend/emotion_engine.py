@@ -49,27 +49,19 @@ ENERGY_LABELS_VN = {
 EMOTION_HALF_LIFE_SECONDS = 240.0
 # Năng lượng do model đặt (override) sẽ tự hết hạn và quay về nhịp ngày.
 ENERGY_OVERRIDE_TTL_SECONDS = 900.0
-# Mỗi lượt nói của bé làm Doraemon mệt thêm một chút; nghỉ > 60s thì hồi phục.
-FATIGUE_PER_TURN = 0.025
-FATIGUE_RECOVERY_PER_MINUTE = 0.02
-FATIGUE_TIRED_THRESHOLD = 0.5
+# Mỗi lượt nói của bé làm Doraemon mệt thêm một chút (rất nhẹ để không bị kiệt sức sớm).
+FATIGUE_PER_TURN = 0.005
+FATIGUE_RECOVERY_PER_MINUTE = 0.05
+FATIGUE_TIRED_THRESHOLD = 0.85
 
 
 def _energy_baseline_for_hour(hour: int) -> str:
     """Nhịp sinh hoạt của Doraemon theo giờ trong ngày (giờ địa phương)."""
-    if 5 <= hour < 8:
-        return "sleepy"      # sáng sớm còn ngái ngủ
-    if 8 <= hour < 11:
-        return "energetic"   # buổi sáng khỏe khoắn
-    if 11 <= hour < 13:
-        return "sleepy"      # gần trưa hơi ngái
-    if 13 <= hour < 15:
-        return "drowsy"      # đầu giờ chiều buồn ngủ
-    if 15 <= hour < 18:
-        return "energetic"   # chiều khỏe khoắn
-    if 18 <= hour < 21:
-        return "excited"     # buổi tối vui chơi phấn khích
-    return "drowsy"          # đêm muộn buồn ngủ — Doraemon rủ bé đi ngủ
+    if 6 <= hour < 21:
+        return "energetic"   # Ban ngày luôn vui vẻ, hoạt bát cùng bé
+    if 21 <= hour < 22:
+        return "sleepy"      # Giờ chuẩn bị đi ngủ
+    return "drowsy"          # Đêm muộn
 
 
 _STATE_KEYS = (
@@ -94,14 +86,22 @@ class EmotionEngine:
 
     def _fresh(self) -> Dict:
         return {
-            "emotion": "neutral",
-            "intensity": 0.5,
-            "energy_override": None,
-            "energy_override_at": 0.0,
+            "emotion": "happy",
+            "intensity": 0.8,
+            "energy_override": "energetic",
+            "energy_override_at": time.time(),
             "fatigue": 0.0,
             "last_turn_at": 0.0,
             "updated_at": time.time(),
         }
+
+    def start_session(self, child_id: str) -> Dict:
+        """Khởi động phiên trò chuyện mới — Doraemon luôn tràn đầy năng lượng tươi vui."""
+        s = self._fresh()
+        self._save(child_id, s)
+        state = self._effective(s)
+        logger.info(f"Started new session for child [{child_id}] with fresh energetic emotion: {state}")
+        return state
 
     def _load(self, child_id: str) -> Dict:
         try:
@@ -130,12 +130,12 @@ class EmotionEngine:
         now = time.time()
         changed = False
 
-        if s["emotion"] != "neutral":
+        if s["emotion"] != "neutral" and s["emotion"] != "happy":
             elapsed = max(0.0, now - s["updated_at"])
             s["intensity"] *= 0.5 ** (elapsed / EMOTION_HALF_LIFE_SECONDS)
             if s["intensity"] < 0.12:
-                s["emotion"] = "neutral"
-                s["intensity"] = 0.5
+                s["emotion"] = "happy"
+                s["intensity"] = 0.8
             changed = True
 
         if s["energy_override"] and now - s["energy_override_at"] > ENERGY_OVERRIDE_TTL_SECONDS:
@@ -143,7 +143,7 @@ class EmotionEngine:
             changed = True
 
         idle = now - s["last_turn_at"]
-        if idle > 60 and s["fatigue"] > 0:
+        if idle > 30 and s["fatigue"] > 0:
             minutes = min(idle / 60.0, 30.0)
             s["fatigue"] = max(0.0, s["fatigue"] - FATIGUE_RECOVERY_PER_MINUTE * minutes)
             changed = True

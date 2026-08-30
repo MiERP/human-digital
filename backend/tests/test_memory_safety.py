@@ -206,6 +206,109 @@ class TestChildMemoryAndSafety(unittest.TestCase):
             cursor.execute("PRAGMA table_info(child_profile);")
             cols = {row["name"] for row in cursor.fetchall()}
         self.assertIn("personality", cols)
+        self.assertIn("streak_days", cols)
+        self.assertIn("last_active_date", cols)
+        self.assertIn("total_sessions_count", cols)
+
+    def test_streak_and_session_logging(self):
+        """Kiểm tra logic tính chuỗi ngày học liên tiếp (Streak) và số buổi"""
+        child_id = "kid_streak_test"
+        self.memory.get_or_create_profile(child_id, default_name="Bi")
+
+        # Buổi học 1 hôm nay
+        self.memory.log_session(child_id, duration_seconds=300, summary="Học về khủng long")
+        profile = self.memory.get_or_create_profile(child_id)
+        self.assertEqual(profile["streak_days"], 1)
+        self.assertEqual(profile["total_sessions_count"], 1)
+
+        # Buổi học thứ 2 trong cùng ngày -> giữ nguyên streak, tăng total_sessions
+        self.memory.log_session(child_id, duration_seconds=400, summary="Học về vũ trụ")
+        profile = self.memory.get_or_create_profile(child_id)
+        self.assertEqual(profile["streak_days"], 1)
+        self.assertEqual(profile["total_sessions_count"], 2)
+
+    def test_daily_digest_and_badges(self):
+        """Kiểm tra báo cáo phụ huynh Daily Digest và hệ thống huy hiệu bảo bối"""
+        child_id = "kid_digest_test"
+        self.memory.get_or_create_profile(child_id, default_name="An")
+        
+        # Thêm từ vựng học tập
+        self.memory.update_learning_progress(child_id, "Animals", mastered_words=["cat", "dog", "lion", "tiger", "bear"], needs_practice=["monkey"])
+        self.memory.update_learning_progress(child_id, "Space", mastered_words=["sun", "moon", "earth"])
+        
+        # Ghi 1 session
+        self.memory.log_session(child_id, duration_seconds=600, summary="Bé học rất giỏi về các loài động vật")
+
+        digest = self.memory.get_daily_digest(child_id)
+        self.assertEqual(digest["child_name"], "An")
+        self.assertEqual(digest["total_sessions"], 1)
+        self.assertEqual(digest["total_duration_minutes"], 10.0)
+        self.assertGreaterEqual(digest["mastered_words_count"], 5)
+        self.assertIn("cat", digest["mastered_words"])
+        self.assertIn("monkey", digest["needs_practice"])
+
+        # Kiểm tra huy hiệu
+        badges = {b["id"]: b["unlocked"] for b in digest["badges"]}
+        self.assertTrue(badges["first_step"]) # Đã học 1 session
+        self.assertTrue(badges["vocab_5"])    # Đã thuộc >= 5 từ
+        self.assertIsNotNone(digest["pedagogical_advice"])
+
+    def test_api_child_digest_endpoint(self):
+        """Kiểm tra REST API GET /api/child/digest hoạt động chính xác"""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        client = TestClient(app)
+        child_id = "kid_api_test_01"
+        self.memory.get_or_create_profile(child_id, default_name="Bé Bơ")
+        self.memory.log_session(child_id, duration_seconds=180, summary="Làm quen với Doraemon")
+
+        response = client.get(f"/api/child/digest?child_id={child_id}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["child_id"], child_id)
+        self.assertIn("streak_days", data)
+        self.assertIn("badges", data)
+        self.assertIn("mastered_words", data)
+
+    def test_generate_dynamic_topics(self):
+        """Kiểm tra sinh thẻ chủ đề động theo sở thích và tiến độ học tập"""
+        child_id = "kid_topic_test_01"
+        self.memory.get_or_create_profile(child_id, default_name="Minh")
+        self.memory.update_profile_fact(child_id, "favorite_animal", "Dolphin")
+        self.memory.update_learning_progress(child_id, "Animals", mastered_words=["dog"], needs_practice=["brave"])
+
+        topics = self.memory.generate_dynamic_topics(child_id)
+        self.assertEqual(len(topics), 6)
+        
+        # Thẻ 1: Sở thích Dolphin
+        self.assertEqual(topics[0]["id"], "fav_animal_quest")
+        self.assertIn("Dolphin", topics[0]["title"])
+
+        # Thẻ 2: Ôn tập từ 'Brave'
+        self.assertEqual(topics[1]["id"], "vocab_review")
+        self.assertIn("Brave", topics[1]["title"])
+
+        # Tất cả các thẻ đều có prompt_hint và emoji
+        for t in topics:
+            self.assertIn("title", t)
+            self.assertIn("emoji", t)
+            self.assertIn("color_hex", t)
+            self.assertIn("prompt_hint", t)
+
+    def test_api_child_topics_endpoint(self):
+        """Kiểm tra REST API GET /api/child/topics"""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        client = TestClient(app)
+        child_id = "kid_api_topics_01"
+        response = client.get(f"/api/child/topics?child_id={child_id}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["count"], 6)
+        self.assertEqual(len(data["topics"]), 6)
 
 if __name__ == "__main__":
     unittest.main()

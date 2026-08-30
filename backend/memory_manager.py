@@ -3,7 +3,7 @@ import json
 import sqlite3
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 
 logger = logging.getLogger("digital-human-memory")
 
@@ -58,6 +58,9 @@ class MemoryManager:
                     learning_level TEXT DEFAULT 'Starters',
                     personality TEXT, -- Mô tả tính cách / phong cách giao tiếp của bé
                     profile_completed INTEGER DEFAULT 0, -- 1 khi phụ huynh đã điền xong màn setup
+                    streak_days INTEGER DEFAULT 0,       -- Chuỗi ngày học liên tiếp (Gamification)
+                    last_active_date TEXT,               -- Ngày học gần nhất (YYYY-MM-DD)
+                    total_sessions_count INTEGER DEFAULT 0, -- Tổng số phiên trò chuyện
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -72,6 +75,12 @@ class MemoryManager:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN gender TEXT;")
             if "profile_completed" not in existing_columns:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN profile_completed INTEGER DEFAULT 0;")
+            if "streak_days" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN streak_days INTEGER DEFAULT 0;")
+            if "last_active_date" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN last_active_date TEXT;")
+            if "total_sessions_count" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN total_sessions_count INTEGER DEFAULT 0;")
 
             # 2. Bảng kỷ niệm thường ngày (Episodic Memories)
             cursor.execute("""
@@ -429,6 +438,14 @@ class MemoryManager:
             if recent_topic["needs_practice"]:
                 lines.append(f"- English Practice Focus: Topic '{recent_topic['topic']}', encourage words: {', '.join(recent_topic['needs_practice'])}")
 
+        # Streak & Gamification context
+        streak = profile.get("streak_days", 0)
+        total_sessions = profile.get("total_sessions_count", 0)
+        if streak > 1:
+            lines.append(f"- Streak: Bé đang có chuỗi {streak} ngày học liên tiếp! Hãy khen ngợi tinh thần chăm chỉ của bé!")
+        elif total_sessions == 0:
+            lines.append("- Session: Đây là buổi đầu tiên bé làm quen với Doraemon. Hãy mở đầu thật hào hứng, ấm áp và thân thiện!")
+
         last_session = self.get_last_session_summary(child_id)
         if last_session and last_session.get("summary"):
             lines.append(
@@ -439,7 +456,7 @@ class MemoryManager:
 
         return "\n".join(lines)
 
-    # ==================== Session Lifecycle (Buổi trò chuyện) ====================
+    # ==================== Session Lifecycle & Gamification ====================
 
     def log_session(
         self,
@@ -448,20 +465,56 @@ class MemoryManager:
         summary: Optional[str] = None,
         session_topic: Optional[str] = None
     ) -> int:
-        """Chốt lại một buổi trò chuyện: tổng kết buổi + thời lượng.
+        """Chốt lại một buổi trò chuyện: tổng kết buổi + thời lượng + cập nhật Streak.
 
-        Lưu vào session_logs để Doraemon nhớ buổi trước đã làm gì — nền tảng
-        cho việc "lớn lên cùng bé" (lần sau mở lại nhắc lại kỷ niệm chung).
+        Lưu vào session_logs để Doraemon nhớ buổi trước đã làm gì và tính chuỗi
+        ngày học liên tiếp (Streak) nhằm khuyến khích thói quen học tập của trẻ.
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            now_dt = datetime.now(timezone.utc)
+            today_str = now_dt.strftime("%Y-%m-%d")
+
+            # 1. Lưu log phiên trò chuyện
             cursor.execute("""
                 INSERT INTO session_logs (child_id, session_topic, duration_seconds, summary)
                 VALUES (?, ?, ?, ?);
             """, (child_id, session_topic, max(0, duration_seconds), (summary or "").strip()))
-            conn.commit()
             session_id = cursor.lastrowid
-            logger.info(f"Session logged for {child_id}: {duration_seconds}s — {summary}")
+
+            # 2. Cập nhật Streak & Tổng số session trong child_profile
+            cursor.execute("SELECT streak_days, last_active_date, total_sessions_count FROM child_profile WHERE child_id = ?;", (child_id,))
+            row = cursor.fetchone()
+            if row:
+                current_streak = row["streak_days"] or 0
+                last_date_str = row["last_active_date"]
+                total_sessions = (row["total_sessions_count"] or 0) + 1
+
+                new_streak = current_streak
+                if not last_date_str:
+                    new_streak = 1
+                elif last_date_str == today_str:
+                    # Đã học trong ngày hôm nay, giữ nguyên streak
+                    new_streak = max(1, current_streak)
+                else:
+                    try:
+                        last_d = datetime.strptime(last_date_str, "%Y-%m-%d").date()
+                        today_d = now_dt.date()
+                        if today_d - last_d == timedelta(days=1):
+                            new_streak = current_streak + 1
+                        else:
+                            new_streak = 1
+                    except Exception:
+                        new_streak = 1
+
+                cursor.execute("""
+                    UPDATE child_profile
+                    SET streak_days = ?, last_active_date = ?, total_sessions_count = ?, updated_at = ?
+                    WHERE child_id = ?;
+                """, (new_streak, today_str, total_sessions, now_dt.isoformat(), child_id))
+
+            conn.commit()
+            logger.info(f"Session logged for {child_id}: {duration_seconds}s (Streak={new_streak if row else 1}) — {summary}")
             return session_id
 
     def get_last_session_summary(self, child_id: str) -> Optional[Dict[str, Any]]:
@@ -477,6 +530,127 @@ class MemoryManager:
             """, (child_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    # ==================== Parent Digest & Gamification Reports ====================
+
+    def get_daily_digest(self, child_id: str = "default_child") -> Dict[str, Any]:
+        """
+        Tổng hợp báo cáo tiến độ học tập và huy hiệu dành cho Phụ huynh (Parent Dashboard).
+        Bao gồm: Chuỗi ngày (Streak), Từ vựng đã làm chủ, Chủ đề đã khám phá, và Huy hiệu bảo bối.
+        """
+        profile = self.get_or_create_profile(child_id)
+        learning = self.get_learning_summary(child_id)
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Thống kê session
+            cursor.execute("""
+                SELECT COUNT(*) as total_sessions, SUM(duration_seconds) as total_duration
+                FROM session_logs
+                WHERE child_id = ?;
+            """, (child_id,))
+            stat_row = cursor.fetchone()
+            total_sessions = stat_row["total_sessions"] if stat_row else 0
+            total_duration_sec = stat_row["total_duration"] or 0
+
+            # Lấy 5 session gần nhất
+            cursor.execute("""
+                SELECT id, session_topic, duration_seconds, summary, created_at
+                FROM session_logs
+                WHERE child_id = ?
+                ORDER BY created_at DESC
+                LIMIT 5;
+            """, (child_id,))
+            recent_sessions = [dict(r) for r in cursor.fetchall()]
+
+        # Gom danh sách từ vựng
+        all_mastered = []
+        all_practice = []
+        for topic_item in learning:
+            all_mastered.extend(topic_item.get("mastered_words", []))
+            all_practice.extend(topic_item.get("needs_practice", []))
+
+        # Loại bỏ trùng lặp
+        unique_mastered = sorted(list(set(all_mastered)))
+        unique_practice = sorted(list(set(all_practice)))
+        streak_days = profile.get("streak_days", 0)
+
+        # Tính toán Huy hiệu Bảo bối (Badges)
+        badges = [
+            {
+                "id": "first_step",
+                "name": "🌱 Bước Chân Đầu Tiên",
+                "desc": "Hoàn thành buổi trò chuyện đầu tiên với Doraemon",
+                "icon": "🌱",
+                "unlocked": total_sessions >= 1
+            },
+            {
+                "id": "streak_3",
+                "name": "🔥 Chăm Chỉ 3 Ngày",
+                "desc": "Trò chuyện cùng Doraemon 3 ngày liên tiếp",
+                "icon": "🔥",
+                "unlocked": streak_days >= 3
+            },
+            {
+                "id": "streak_7",
+                "name": "⚡ Siêu Bền Bỉ 7 Ngày",
+                "desc": "Đạt chuỗi 7 ngày học tập liên tục",
+                "icon": "⚡",
+                "unlocked": streak_days >= 7
+            },
+            {
+                "id": "vocab_5",
+                "name": "⭐ Thợ Săn Từ Vựng",
+                "desc": "Làm chủ từ 5 từ vựng tiếng Anh mới",
+                "icon": "⭐",
+                "unlocked": len(unique_mastered) >= 5
+            },
+            {
+                "id": "vocab_15",
+                "name": "👑 Siêu Sao Tiếng Anh",
+                "desc": "Làm chủ từ 15 từ vựng tiếng Anh",
+                "icon": "👑",
+                "unlocked": len(unique_mastered) >= 15
+            },
+            {
+                "id": "explorer",
+                "name": "🔭 Nhà Thám Hiểm Tri Thức",
+                "desc": "Khám phá từ 3 chủ đề học tập và bách khoa",
+                "icon": "🔭",
+                "unlocked": len(learning) >= 3 or total_sessions >= 3
+            }
+        ]
+
+        # Lời khuyên sư phạm tự động cho phụ huynh
+        child_name = profile.get("nickname") or profile.get("name") or "Bé"
+        if len(unique_mastered) > 0:
+            advice = (
+                f"{child_name} đang có phản xạ rất tốt với nhóm từ vựng tiếng Anh! "
+                f"Phụ huynh có thể khuyến khích bé sử dụng các từ: '{', '.join(unique_mastered[:3])}' "
+                "trong các hoạt động đời thường ở nhà."
+            )
+        elif streak_days > 0:
+            advice = f"{child_name} đang duy trì thói quen học tập rất đều đặn! Hãy tiếp tục động viên bé mỗi ngày."
+        else:
+            advice = f"Hãy cùng {child_name} mở Doraemon trò chuyện 5-10 phút mỗi ngày để tạo phản xạ giao tiếp tự tin nhé!"
+
+        return {
+            "child_id": child_id,
+            "child_name": child_name,
+            "age": profile.get("age", 6),
+            "learning_level": profile.get("learning_level", "Starters"),
+            "streak_days": streak_days,
+            "total_sessions": total_sessions,
+            "total_duration_minutes": round(total_duration_sec / 60.0, 1),
+            "mastered_words_count": len(unique_mastered),
+            "mastered_words": unique_mastered,
+            "needs_practice": unique_practice,
+            "learning_topics": learning,
+            "recent_sessions": recent_sessions,
+            "badges": badges,
+            "pedagogical_advice": advice,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
 
     # ==================== Privacy & COPPA Compliance ====================
 
@@ -496,3 +670,172 @@ class MemoryManager:
             conn.commit()
             logger.warning(f"All data for child {child_id} has been permanently deleted.")
             return True
+
+    # ==================== Dynamic Discovery Topics ====================
+
+    def generate_dynamic_topics(self, child_id: str = "default_child") -> List[Dict[str, Any]]:
+        """
+        Sinh danh sách 6 thẻ chủ đề thông minh (Dynamic Discovery Topics):
+        1. Cá nhân hóa theo sở thích / nhân vật yêu thích của bé.
+        2. Ôn tập từ vựng & kiến thức (Spaced Repetition nếu có từ needs_practice).
+        3. Khám phá theo thời điểm trong ngày (Sáng / Chiều / Tối).
+        4. Bách khoa tri thức (Vũ trụ, Khủng long, Đại dương, Khoa học).
+        5. Tình huống Tiếng Anh nhập vai (English Roleplay).
+        6. Bí ẩn đại dương & câu đố vui trí tuệ.
+        """
+        profile = self.get_or_create_profile(child_id)
+        child_name = profile.get("nickname") or profile.get("name") or "Bé"
+        hobbies = profile.get("hobbies") or []
+        fav_animal = profile.get("favorite_animal") or ""
+        learning = self.get_learning_summary(child_id)
+
+        # Lấy từ vựng cần ôn tập
+        practice_words: List[str] = []
+        for item in learning:
+            for w in item.get("needs_practice", []):
+                if w and w not in practice_words:
+                    practice_words.append(w)
+
+        topics: List[Dict[str, Any]] = []
+
+        # 1. Thẻ Cá nhân hóa theo sở thích (Personalized Hobby / Pet)
+        if fav_animal:
+            topics.append({
+                "id": "fav_animal_quest",
+                "title": f"Thế Giới {fav_animal.capitalize()}",
+                "title_en": f"{fav_animal.capitalize()} Kingdom",
+                "emoji": "🐾",
+                "color_hex": "#F472B6",
+                "tag": "Sở thích của bé",
+                "description": f"Cùng Doraemon khám phá những bí mật siêu đáng yêu về {fav_animal}!",
+                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: Thế giới loài {fav_animal} (sở thích của bé). Hãy mở đầu bằng một câu chào vui tươi, chia sẻ 1 bí mật bất ngờ về {fav_animal} và đố bé 1 câu hỏi gợi mở nhé!]"
+            })
+        elif hobbies:
+            hobby_0 = str(hobbies[0])
+            topics.append({
+                "id": "fav_hobby_quest",
+                "title": f"Thám Hiểm {hobby_0.capitalize()}",
+                "title_en": f"{hobby_0.capitalize()} Adventure",
+                "emoji": "🎨",
+                "color_hex": "#F472B6",
+                "tag": "Sở thích của bé",
+                "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Doraemon!",
+                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: {hobby_0} (sở thích của bé). Hãy mở đầu thân thiện, hỏi bé về sở thích này và đố bé một câu đố vui nhé!]"
+            })
+        else:
+            topics.append({
+                "id": "dino_discovery",
+                "title": "Khủng Long Khổng Lồ",
+                "title_en": "Dinosaur Kingdom",
+                "emoji": "🦖",
+                "color_hex": "#F472B6",
+                "tag": "Khám phá muôn loài",
+                "description": "Giải mã sức mạnh của T-Rex bạo chúa và các loài khủng long kỷ Jura!",
+                "prompt_hint": "[Bé vừa chọn khám phá chủ đề: Khủng Long Kỷ Jura. Hãy mở đầu hào hứng, giới thiệu một sự thật kỳ thú về khủng long và đố bé một câu hỏi nhé!]"
+            })
+
+        # 2. Thẻ Ôn tập từ vựng thông minh (Spaced Repetition Review)
+        if practice_words:
+            word_target = practice_words[0]
+            topics.append({
+                "id": "vocab_review",
+                "title": f"Thử Thách Từ '{word_target.capitalize()}'",
+                "title_en": f"Learn '{word_target.capitalize()}'",
+                "emoji": "🌟",
+                "color_hex": "#38BDF8",
+                "tag": "Ôn tập từ mới",
+                "description": f"Chinh phục từ vựng '{word_target}' trong các câu chuyện kỳ thú!",
+                "prompt_hint": f"[Bé vừa chọn ôn tập từ vựng tiếng Anh '{word_target}'. Hãy tạo một câu chuyện ngắn thú vị, dạy bé cách phát âm chuẩn và khuyến khích bé nói từ '{word_target}' nhé!]"
+            })
+        else:
+            topics.append({
+                "id": "magic_english",
+                "title": "Tiếng Anh Diệu Kỳ",
+                "title_en": "Magic English Words",
+                "emoji": "✨",
+                "color_hex": "#38BDF8",
+                "tag": "Học từ mới",
+                "description": "Luyện phát âm chuẩn bản xứ và học các từ vựng tiếng Anh vui nhộn!",
+                "prompt_hint": "[Bé vừa chọn chủ đề: Tiếng Anh Diệu Kỳ. Hãy mở đầu bằng một câu chào tiếng Anh ấm áp, giới thiệu 1-2 từ mới dễ nhớ và rủ bé cùng đọc theo nhé!]"
+            })
+
+        # 3. Thẻ Theo khung giờ trong ngày (Time-aware)
+        current_hour = datetime.now().hour
+        if 5 <= current_hour < 11:
+            topics.append({
+                "id": "morning_energy",
+                "title": "Chào Ngày Mới Rực Rỡ",
+                "title_en": "Sunny Morning Energy",
+                "emoji": "☀️",
+                "color_hex": "#FBBF24",
+                "tag": "Khởi động buổi sáng",
+                "description": "Tìm hiểu xem các bạn động vật thức dậy và ăn sáng thế nào nhé!",
+                "prompt_hint": "[Bé vừa chọn chủ đề: Chào Ngày Mới Rực Rỡ. Hãy chúc bé một buổi sáng tràn đầy năng lượng và hỏi bé đã ăn sáng món gì ngon chưa nhé!]"
+            })
+        elif 11 <= current_hour < 18:
+            topics.append({
+                "id": "afternoon_science",
+                "title": "Khoa Học Quanh Em",
+                "title_en": "Curious Everyday Science",
+                "emoji": "🔬",
+                "color_hex": "#10B981",
+                "tag": "Khoa học vui",
+                "description": "Tại sao cầu vồng có 7 màu? Tại sao lá cây lại có màu xanh?",
+                "prompt_hint": "[Bé vừa chọn chủ đề: Khoa Học Quanh Em. Hãy chia sẻ một hiện tượng tự nhiên thú vị như Cầu vồng hoặc Lá cây và đố bé giải thích nhé!]"
+            })
+        else:
+            topics.append({
+                "id": "night_stars",
+                "title": "Bí Mật Bầu Trời Đêm",
+                "title_en": "Night Sky & Stars",
+                "emoji": "🌙",
+                "color_hex": "#818CF8",
+                "tag": "Chuyện trước giờ ngủ",
+                "description": "Du hành qua các chòm sao lấp lánh và lắng nghe giai thoại êm dịu.",
+                "prompt_hint": "[Bé vừa chọn chủ đề: Bí Mật Bầu Trời Đêm. Hãy dùng giọng điệu êm dịu, ấm áp, kể cho bé nghe về Mặt Trăng và các chòm sao lấp lánh nhé!]"
+            })
+
+        # 4. Thẻ Vũ trụ & Thiên văn (Space Adventure)
+        topics.append({
+            "id": "space_voyage",
+            "title": "Du Hành Vũ Trụ",
+            "title_en": "Space & Solar System",
+            "emoji": "🚀",
+            "color_hex": "#8B5CF6",
+            "tag": "Vũ trụ & Thiên văn",
+            "description": "Lái Tàu Vũ Trụ đổ bộ lên Mặt Trăng, Sao Hỏa và giải mã Hố Đen!",
+            "prompt_hint": "[Bé vừa chọn chủ đề: Du Hành Vũ Trụ. Hãy thắt dây an toàn, cùng bé bước lên Tàu Vũ Trụ bay tới Sao Hỏa và đố bé về Hệ Mặt Trời nhé!]"
+        })
+
+        # 5. Thẻ Tiếng Anh Nhập Vai (Roleplay Adventure)
+        roleplay_pool = [
+            ("Tiệm Kem New York", "Ice Cream Shop", "🍦", "Nhập vai bác bán kem và gọi các vị kem yêu thích bằng tiếng Anh!"),
+            ("Phi Hành Gia Thám Hiểm", "Astronaut Mission", "👨‍🚀", "Cùng đếm ngược phóng tên lửa: 3, 2, 1... Blast off!"),
+            ("Đầu Bếp Nhí Tài Ba", "Master Junior Chef", "🍕", "Làm chiếc bánh pizza khổng lồ với phô mai và cà chua!"),
+        ]
+        day_seed = date.today().toordinal() % len(roleplay_pool)
+        rp_title, rp_en, rp_emoji, rp_desc = roleplay_pool[day_seed]
+        topics.append({
+            "id": f"roleplay_{day_seed}",
+            "title": rp_title,
+            "title_en": rp_en,
+            "emoji": rp_emoji,
+            "color_hex": "#EC4899",
+            "tag": "Nhập vai Tiếng Anh",
+            "description": rp_desc,
+            "prompt_hint": f"[Bé vừa chọn trò chơi nhập vai tiếng Anh: {rp_title} ({rp_en}). Hãy bắt đầu đóng vai một cách dí dỏm, hào hứng và hướng dẫn bé đối đáp nhé!]"
+        })
+
+        # 6. Thẻ Bí Ẩn Đại Dương (Ocean Mysteries)
+        topics.append({
+            "id": "ocean_depths",
+            "title": "Đại Dương Huyền Bí",
+            "title_en": "Ocean Mysteries",
+            "emoji": "🌊",
+            "color_hex": "#06B6D4",
+            "tag": "Bách khoa thiên nhiên",
+            "description": "Lặn sâu ngắm Cá Voi Xanh khổng lồ và thế giới san hô rực rỡ!",
+            "prompt_hint": "[Bé vừa chọn khám phá: Đại Dương Huyền Bí. Hãy lặn sâu xuống đáy biển cùng bé, giới thiệu về Cá Voi Xanh và đố bé một câu hỏi kỳ thú nhé!]"
+        })
+
+        return topics

@@ -45,24 +45,25 @@ class AudioRecorder(
         private const val VAD_FRAME_SAMPLES = 512
         private const val VAD_FRAME_BYTES = VAD_FRAME_SAMPLES * 2
 
-        // Giữ lại ~300ms audio trước điểm bắt đầu nói để không cắt mất âm tiết đầu.
-        // Tương ứng với VAD_PREFIX_PADDING_MS=200 ở backend.
-        private const val PRE_ROLL_FRAMES = 9
+        // Giữ lại ~448ms audio (14 frames x 32ms) trước điểm bắt đầu nói để không mất âm tiết đầu (như "Có", "Dạ").
+        private const val PRE_ROLL_FRAMES = 14
 
-        // Manual VAD: Gemini server không có prefix padding/silence tolerance — xử lý ngay
-        // khi nhận activity_end. Chỉ cần gửi thêm 1-2 frames (~30-60ms) để chắc chắn
-        // âm tiết cuối không bị cắt giữa packet. Tăng cao sẽ gây audio thừa bị model xử lý.
-        private const val TAIL_FRAMES = 2
+        // Khoảng lặng để chốt kết thúc lượt nói: 20 frames x 32ms = ~640ms.
+        // Tối ưu cho on-device Silero VAD: phản hồi nhanh, không lag, vẫn đủ kiên nhẫn khi bé ngập ngừng.
+        private const val SILENCE_FRAMES_THRESHOLD = 20
 
-        // Fallback khi Silero VAD không khởi tạo được (mất model/ONNX lỗi).
-        private const val RMS_FALLBACK_THRESHOLD = 0.05f
+        // Chốt "bé bắt đầu nói" trong điều kiện bình thường: 2 frames (~64ms) để nhận diện nhanh.
+        private const val SPEECH_ONSET_FRAMES_NORMAL = 2
 
-        // Chỉ chốt "bé đang nói" khi có ít nhất 2 frame liên tiếp là speech.
-        // Chống nhiễu ngẫu nhiên 1 frame bị VAD nhận nhầm thành giọng nói.
-        private const val SPEECH_ONSET_FRAMES = 2
+        // Trong 800ms ngay sau khi Doraemon phát âm thanh, cần 4 frames (~128ms) để
+        // triệt tiêu tuyệt đối rủi ro tiếng vang phòng (room reverb) kích hoạt giả mạo ngắt lời.
+        private const val SPEECH_ONSET_FRAMES_POST_PLAYBACK = 4
 
-        // Gia hạn echo gate sau chunk audio cuối cùng của Robo (che khoảng dừng giữa câu).
-        private const val PLAYBACK_GRACE_MS = 500L
+        // Fallback khi Silero VAD không khởi tạo được.
+        private const val RMS_FALLBACK_THRESHOLD = 0.035f
+
+        // Gia hạn echo gate sau khi Doraemon dứt lời thực tế trên loa (450ms) để tiêu tán toàn bộ tiếng vang phòng.
+        private const val PLAYBACK_GRACE_MS = 450L
     }
 
     private var audioRecord: AudioRecord? = null
@@ -77,10 +78,14 @@ class AudioRecorder(
     @Volatile
     var isPlaybackActive = false
 
-    // Chốt "loa đang phát" thêm một khoảng nghỉ ngắn sau chunk cuối cùng để che
-    // các khoảng dừng giữa câu của Robo (nếu không, echo lọt vào ngay lúc đó).
+    @Volatile
+    var isMicListeningEnabled = true
+
     @Volatile
     private var playbackGraceUntil = 0L
+
+    @Volatile
+    private var lastPlaybackChunkTime = 0L
 
     @SuppressLint("MissingPermission")
     fun startRecording(scope: CoroutineScope) {
@@ -127,15 +132,15 @@ class AudioRecorder(
                 .setSampleRate(SampleRate.SAMPLE_RATE_16K)
                 .setFrameSize(FrameSize.FRAME_SIZE_512)
                 .setMode(Mode.AGGRESSIVE)
-                .setSpeechDurationMs(120)
-                .setSilenceDurationMs(600)
+                .setSpeechDurationMs(100)
+                .setSilenceDurationMs(700)
                 .build()
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
 
-        // Lớp lọc gió + tạp âm phần mềm (high-pass + adaptive noise gate).
+        // Lớp lọc gió + tạp âm phần mềm (high-pass 200Hz + adaptive noise gate).
         val noiseCleaner = NoiseCleaner()
 
         audioRecord?.startRecording()
@@ -145,13 +150,12 @@ class AudioRecorder(
             val frame = ByteArray(VAD_FRAME_BYTES)
             val preRoll = ArrayDeque<ByteArray>(PRE_ROLL_FRAMES + 1)
             var userSpeaking = false
-            var tailFrames = 0
-            var frameOffset = 0
+            var silenceFrames = 0
             var speechOnsetFrames = 0
+            var frameOffset = 0
 
             while (isActive && isRecording) {
-                // Đọc đủ đúng 1024 byte (512 mẫu) cho Silero VAD; AudioRecord có thể
-                // trả về ít hơn yêu cầu nên phải tích lũy cho đến khi đủ một frame.
+                // Đọc đúng 1024 bytes (512 mẫu 16-bit PCM = 32ms)
                 val readBytes = audioRecord?.read(frame, frameOffset, frame.size - frameOffset) ?: 0
                 if (readBytes <= 0) continue
 
@@ -160,21 +164,17 @@ class AudioRecorder(
                 frameOffset = 0
                 val frameData = frame.copyOf()
 
-                // Lọc gió + tạp âm trước khi đưa vào VAD và stream lên server.
-                // cleanInPlace zero-out frame nhiễu; trả về RMS sau lọc cho fallback VAD.
+                // Lọc gió + tạp âm trước khi đưa vào VAD và stream lên server
                 val cleanRms = noiseCleaner.cleanInPlace(frameData)
 
-                // Âm lượng hiển thị (RMS chỉ dùng cho UI, không dùng để quyết định gửi audio).
+                // Âm lượng hiển thị trên UI
                 val rawRms = calculateRawRMS(frameData)
                 onInputVolume((rawRms * 4.0f).coerceIn(0.0f, 1.0f))
 
-                // Echo gate: khi Robo đang phát (có gia hạn ngắn sau chunk cuối),
-                // không được phép trigger speech để tránh tiếng loa vọng ngược vào
-                // micro bị hiểu nhầm là bé đang nói -> cắt ngang câu trả lời.
                 val now = System.currentTimeMillis()
-                val playbackBlocked = isPlaybackActive || now < playbackGraceUntil
+                val isGated = !isMicListeningEnabled || isPlaybackActive || now < playbackGraceUntil
 
-                // Silero VAD phát hiện giọng nói; fallback RMS nếu VAD không khả dụng.
+                // Silero VAD phát hiện giọng nói từ audio đã qua lọc nhiễu
                 val vadInstance = vad
                 val isSpeech = if (vadInstance != null) {
                     vadInstance.isSpeech(frameData)
@@ -182,54 +182,66 @@ class AudioRecorder(
                     cleanRms > RMS_FALLBACK_THRESHOLD
                 }
 
-                if (isSpeech && !playbackBlocked) {
-                    // Debounce: yêu cầu 2 frame liên tiếp để chốt "bé bắt đầu nói".
-                    // Frame đầu tiên vẫn được đệm vào pre-roll nên không mất âm tiết.
+                if (isGated) {
+                    // Micro đang bị khoá (Doraemon đang suy nghĩ hoặc đang phát âm thanh):
+                    // KHÔNG nhận diện giọng nói, xóa sạch đệm pre-roll để không lọt tiếng vang loa hoặc tạp âm phòng.
+                    // Đặt userSpeaking = false mà KHÔNG gọi onSpeechEnded() để tránh gửi activity_end giả mạo làm Gemini bị interrupted!
+                    speechOnsetFrames = 0
+                    silenceFrames = 0
+                    preRoll.clear()
+                    userSpeaking = false
+                } else if (isSpeech) {
                     if (!userSpeaking) {
                         speechOnsetFrames++
-                        if (speechOnsetFrames < SPEECH_ONSET_FRAMES) {
-                            preRoll.addLast(frameData)
-                            while (preRoll.size > PRE_ROLL_FRAMES) {
-                                preRoll.removeFirst()
-                            }
-                            continue
-                        }
-                        userSpeaking = true
-                        tailFrames = 0
-
-                        // Gửi pre-roll để server không bị mất âm tiết đầu tiên.
-                        while (preRoll.isNotEmpty()) {
-                            onAudioChunk(preRoll.removeFirst())
-                        }
-                        onSpeechStarted()
-                    }
-                    onAudioChunk(frameData)
-                } else if (userSpeaking && !playbackBlocked) {
-                    // Kéo dài một đoạn đuôi sau khi hết nói để server kết thúc lượt tự nhiên.
-                    onAudioChunk(frameData)
-                    tailFrames++
-                    if (tailFrames >= TAIL_FRAMES) {
-                        userSpeaking = false
-                        tailFrames = 0
-                        speechOnsetFrames = 0
-                        onSpeechEnded()
-                    }
-                } else if (userSpeaking && playbackBlocked) {
-                    // Loa bất ngờ phát (Robo vừa trả lời trước khi lượt nói chốt).
-                    // Kết thúc lượt ngay, không gửi audio echo lên server.
-                    userSpeaking = false
-                    tailFrames = 0
-                    speechOnsetFrames = 0
-                    onSpeechEnded()
-                } else {
-                    // Đang im lặng: chỉ đệm pre-roll, không gửi liên tục.
-                    // Khi loa đang phát, không đệm tiếng vọng của robot để tránh echo khi barge-in.
-                    speechOnsetFrames = 0
-                    if (!isPlaybackActive) {
                         preRoll.addLast(frameData)
                         while (preRoll.size > PRE_ROLL_FRAMES) {
                             preRoll.removeFirst()
                         }
+
+                        // Debounce thích ứng: Trong 800ms sau khi Doraemon phát âm thanh, cần 4 frame (~128ms)
+                        // để chống tiếng vang phòng kích hoạt ngắt lời giả. Bình thường chỉ cần 2 frame (~64ms).
+                        val timeSincePlayback = now - lastPlaybackChunkTime
+                        val requiredOnset = if (timeSincePlayback < 800L) {
+                            SPEECH_ONSET_FRAMES_POST_PLAYBACK
+                        } else {
+                            SPEECH_ONSET_FRAMES_NORMAL
+                        }
+
+                        if (speechOnsetFrames >= requiredOnset) {
+                            userSpeaking = true
+                            silenceFrames = 0
+
+                            // 1. Gửi signal activity_start TRƯỚC KHI gửi bất kỳ chunk audio nào
+                            onSpeechStarted()
+
+                            // 2. Gửi các frame pre-roll đệm trước đó để không bị mất âm đầu
+                            while (preRoll.isNotEmpty()) {
+                                onAudioChunk(preRoll.removeFirst())
+                            }
+                        }
+                    } else {
+                        silenceFrames = 0
+                        speechOnsetFrames = 0
+                        onAudioChunk(frameData)
+                    }
+                } else if (userSpeaking) {
+                    // Trong khi đang nói nhưng có khoảng nghỉ giữa các từ:
+                    // Vẫn stream audio để âm cuối tự nhiên và đếm frame khoảng lặng
+                    speechOnsetFrames = 0
+                    onAudioChunk(frameData)
+                    silenceFrames++
+                    if (silenceFrames >= SILENCE_FRAMES_THRESHOLD) {
+                        userSpeaking = false
+                        silenceFrames = 0
+                        onSpeechEnded()
+                    }
+                } else {
+                    // Đang im lặng bình thường: lưu đệm pre-roll
+                    speechOnsetFrames = 0
+                    silenceFrames = 0
+                    preRoll.addLast(frameData)
+                    while (preRoll.size > PRE_ROLL_FRAMES) {
+                        preRoll.removeFirst()
                     }
                 }
             }
@@ -242,7 +254,22 @@ class AudioRecorder(
      * dừng giữa câu, ngăn echo lọt vào giữa câu trả lời.
      */
     fun onPlaybackChunkReceived() {
-        playbackGraceUntil = System.currentTimeMillis() + PLAYBACK_GRACE_MS
+        isPlaybackActive = true
+        val now = System.currentTimeMillis()
+        lastPlaybackChunkTime = now
+        playbackGraceUntil = now + PLAYBACK_GRACE_MS
+    }
+
+    /**
+     * Gọi khi AudioPlayer thực sự kết thúc phát toàn bộ âm thanh qua loa.
+     * Khóa micro thêm PLAYBACK_GRACE_MS (450ms) tính từ thời điểm loa ngừng rung
+     * để triệt tiêu 100% tiếng vang loa lọt vào mic.
+     */
+    fun onPlaybackFinished() {
+        isPlaybackActive = false
+        val now = System.currentTimeMillis()
+        lastPlaybackChunkTime = now
+        playbackGraceUntil = now + PLAYBACK_GRACE_MS
     }
 
     fun stopRecording() {

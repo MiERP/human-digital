@@ -45,6 +45,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.draw.clip
+
 /**
  * Màn hình cấu hình hồ sơ bé — chỉ hiện 1 lần khi bắt đầu sử dụng app
  * hoặc sau khi reset cấu hình. Dữ liệu này là nguồn cá nhân hóa cho Doraemon.
@@ -59,6 +64,8 @@ fun SetupScreen(
     onComplete: (String, Int, String, List<String>, String) -> Unit,
     isSubmitting: Boolean,
     submitError: String?,
+    serverUrl: String = "",
+    onOpenServerConfig: () -> Unit = {},
 ) {
     var name by remember { mutableStateOf("") }
     var age by remember { mutableStateOf(6) }
@@ -66,8 +73,20 @@ fun SetupScreen(
     var hobbiesText by remember { mutableStateOf("") }
     var personalityText by remember { mutableStateOf("") }
 
+    val hostDisplay = remember(serverUrl) {
+        serverUrl
+            .removePrefix("ws://")
+            .removePrefix("wss://")
+            .substringBefore("/ws/live")
+            .ifBlank { "Chưa đặt" }
+    }
+
     val gradient = Brush.verticalGradient(
-        colors = listOf(Color(0xFF0F172A), Color(0xFF1E293B), Color(0xFF0284C7))
+        colors = listOf(
+            Color(0xFF38BDF8),
+            Color(0xFF0284C7),
+            Color(0xFFBAE6FD)
+        )
     )
 
     Column(
@@ -75,32 +94,58 @@ fun SetupScreen(
             .fillMaxSize()
             .background(gradient)
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Badge cấu hình IP máy chủ ở đầu màn hình
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color.White.copy(alpha = 0.25f))
+                .clickable { onOpenServerConfig() }
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "🌐 $hostDisplay",
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "⚙ Đổi IP",
+                color = Color(0xFFFEF08A),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         Text(
-            text = "CHÀO BÉ!",
+            text = "CHÀO BẠN NHỎ! 🐱",
             color = Color.White,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 2.sp
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 1.sp
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Doraemon muốn làm quen với bé. Bố mẹ hãy điền giúp bé nhé!",
-            color = Color(0xFFE2E8F0),
-            fontSize = 14.sp,
+            text = "Doraemon rất muốn làm bạn với bé. Bố mẹ hãy điền thông tin giúp bé nhé!",
+            color = Color.White.copy(alpha = 0.95f),
+            fontSize = 13.sp,
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B).copy(alpha = 0.9f))
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.95f))
         ) {
             Column(
                 modifier = Modifier.padding(20.dp),
@@ -153,6 +198,15 @@ fun SetupScreen(
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            TextButton(onClick = onOpenServerConfig) {
+                Text(
+                    text = "⚙ Đổi IP / Cổng máy chủ ($hostDisplay)",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -226,7 +280,7 @@ private fun AgeDropdown(age: Int, onAgeChange: (Int) -> Unit) {
             Column(modifier = Modifier.background(Color(0xFF1E293B))) {
                 (3..15).forEach { option ->
                     DropdownMenuItem(
-                        text = { Text("$option tuổi", color = Color(0xFFE2E8F0)) },
+                        text = { Text("$option tuổi", color = Color(0xFF0F172A), fontWeight = FontWeight.Medium) },
                         onClick = {
                             onAgeChange(option)
                             expanded = false
@@ -271,10 +325,10 @@ private fun GenderDropdown(gender: String, onGenderChange: (String) -> Unit) {
             onDismissRequest = { expanded = false },
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
-            Column(modifier = Modifier.background(Color(0xFF1E293B))) {
+            Column(modifier = Modifier.background(Color.White)) {
                 options.forEach { (value, label) ->
                     DropdownMenuItem(
-                        text = { Text(label, color = Color(0xFFE2E8F0)) },
+                        text = { Text(label, color = Color(0xFF0F172A), fontWeight = FontWeight.Medium) },
                         onClick = {
                             onGenderChange(value)
                             expanded = false
@@ -305,7 +359,7 @@ private fun TagInputField(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(placeholder, color = Color(0xFF64748B)) },
+            placeholder = { Text(placeholder, color = Color(0xFF94A3B8)) },
             minLines = 1,
             colors = textFieldColors()
         )
@@ -321,17 +375,17 @@ private fun TagInputField(
                     InputChip(
                         selected = false,
                         onClick = { onValueChange(removeTag(value, tag)) },
-                        label = { Text(tag, color = Color.White, fontSize = 13.sp) },
+                        label = { Text(tag, color = Color(0xFF0369A1), fontSize = 13.sp, fontWeight = FontWeight.SemiBold) },
                         trailingIcon = {
                             Text(
                                 text = "×",
-                                color = Color(0xFF94A3B8),
+                                color = Color(0xFF0369A1),
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
                         },
                         colors = InputChipDefaults.inputChipColors(
-                            containerColor = Color(0xFF06B6D4).copy(alpha = 0.25f),
+                            containerColor = Color(0xFFBAE6FD),
                         )
                     )
                 }
@@ -353,11 +407,11 @@ private fun TagInputField(
                             if (isSelected) removeTag(value, option) else addTag(value, option)
                         )
                     },
-                    label = { Text(option) },
+                    label = { Text(option, fontSize = 12.sp) },
                     colors = FilterChipDefaults.filterChipColors(
-                        containerColor = Color(0xFF0F172A),
-                        labelColor = Color(0xFFE2E8F0),
-                        selectedContainerColor = Color(0xFF06B6D4).copy(alpha = 0.35f),
+                        containerColor = Color(0xFFF1F5F9),
+                        labelColor = Color(0xFF334155),
+                        selectedContainerColor = Color(0xFF0284C7),
                         selectedLabelColor = Color.White,
                     )
                 )
@@ -396,19 +450,19 @@ private fun removeTag(text: String, tag: String): String {
 private fun SectionLabel(text: String) {
     Text(
         text = text,
-        color = Color(0xFFFBBF24),
-        fontSize = 15.sp,
-        fontWeight = FontWeight.SemiBold
+        color = Color(0xFF0369A1),
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Bold
     )
 }
 
 @Composable
 private fun textFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = Color(0xFF06B6D4),
-    unfocusedBorderColor = Color(0xFF475569),
-    focusedTextColor = Color.White,
-    unfocusedTextColor = Color.White,
-    cursorColor = Color(0xFF06B6D4)
+    focusedBorderColor = Color(0xFF0284C7),
+    unfocusedBorderColor = Color(0xFFCBD5E1),
+    focusedTextColor = Color(0xFF0F172A),
+    unfocusedTextColor = Color(0xFF0F172A),
+    cursorColor = Color(0xFF0284C7)
 )
 
 private val HOBBY_OPTIONS = listOf(
