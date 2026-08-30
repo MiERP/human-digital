@@ -612,6 +612,39 @@ fun TutorScreen(
         }
     }
 
+    fun setSpeakerphoneRouting(enable: Boolean) {
+        try {
+            val audioManager = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+            if (enable) {
+                audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    val speakerDevice = audioManager.availableCommunicationDevices.firstOrNull {
+                        it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                    }
+                    if (speakerDevice != null) {
+                        audioManager.setCommunicationDevice(speakerDevice)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        audioManager.isSpeakerphoneOn = true
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = true
+                }
+            } else {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    audioManager.clearCommunicationDevice()
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = false
+                }
+                audioManager.mode = android.media.AudioManager.MODE_NORMAL
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Speakerphone routing error: ${e.message}")
+        }
+    }
+
     fun loadDiscoveryTopics() {
         isLoadingTopics = true
         scope.launch(Dispatchers.IO) {
@@ -848,15 +881,29 @@ fun TutorScreen(
         ).also { audioRecorderRef = it }
     }
 
+    fun startSession() {
+        isSessionActive = true
+        setSpeakerphoneRouting(true)
+        audioPlayer.start(scope)
+        client.connect()
+        audioRecorder.startRecording(scope)
+    }
+
+    fun stopSession() {
+        isSessionActive = false
+        isCameraActive = false
+        audioRecorder.stopRecording()
+        audioPlayer.stopAndFlush()
+        client.disconnect()
+        setSpeakerphoneRouting(false)
+    }
+
     // Permission launcher cho Micro & Camera
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            isSessionActive = true
-            audioPlayer.start(scope)
-            client.connect()
-            audioRecorder.startRecording(scope)
+            startSession()
         } else {
             Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với Doraemon!", Toast.LENGTH_SHORT).show()
         }
@@ -867,9 +914,7 @@ fun TutorScreen(
             sleepJob?.cancel()
             faceEmotionManager.release()
             cameraStreamManager.release()
-            audioRecorder.stopRecording()
-            audioPlayer.release()
-            client.disconnect()
+            stopSession()
         }
     }
 
@@ -1276,10 +1321,7 @@ fun TutorScreen(
                 onClick = {
                     if (connectionState == ConnectionState.SLEEPING) {
                         client.wakeUp()
-                        isSessionActive = true
-                        audioPlayer.start(scope)
-                        client.connect()
-                        audioRecorder.startRecording(scope)
+                        startSession()
                     } else if (!isSessionActive) {
                         val hasPermission = ContextCompat.checkSelfPermission(
                             context,
@@ -1287,19 +1329,12 @@ fun TutorScreen(
                         ) == PackageManager.PERMISSION_GRANTED
 
                         if (hasPermission) {
-                            isSessionActive = true
-                            audioPlayer.start(scope)
-                            client.connect()
-                            audioRecorder.startRecording(scope)
+                            startSession()
                         } else {
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     } else {
-                        isSessionActive = false
-                        isCameraActive = false
-                        audioRecorder.stopRecording()
-                        audioPlayer.stopAndFlush()
-                        client.disconnect()
+                        stopSession()
                     }
                 }
             )
@@ -1346,10 +1381,7 @@ fun TutorScreen(
             onTopicSelected = { topic ->
                 showTopicSheet = false
                 if (!isSessionActive) {
-                    isSessionActive = true
-                    audioPlayer.start(scope)
-                    client.connect()
-                    audioRecorder.startRecording(scope)
+                    startSession()
                 }
                 client.selectTopic(topic.title, topic.promptHint)
             }
