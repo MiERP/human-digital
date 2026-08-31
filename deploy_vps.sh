@@ -80,15 +80,18 @@ mkdir -p "$APP_DIR/data"
 ENV_FILE="$APP_DIR/.env"
 
 if [ ! -f "$ENV_FILE" ]; then
-    # Lấy API key từ đối số truyền vào hoặc dùng placeholder
-    GEMINI_KEY="${1:-AIzaSy_YOUR_GEMINI_API_KEY_HERE}"
+    # Lấy danh sách API keys từ đối số truyền vào (hỗ trợ 1 key hoặc nhiều key phân tách bằng dấu phẩy)
+    GEMINI_KEYS="${1:-AIzaSy_YOUR_GEMINI_API_KEY_HERE}"
+    FIRST_KEY=$(echo "$GEMINI_KEYS" | cut -d',' -f1 | cut -d';' -f1 | tr -d ' ')
     ADMIN_KEY="${2:-KiemSoatPhuHuynh2026SecureKeyXYZ987}"
 
     cat <<EOF > "$ENV_FILE"
 # ==========================================
 # CẤU HÌNH MÁY CHỦ DORAEMON DIGITAL HUMAN
 # ==========================================
-GEMINI_API_KEY=$GEMINI_KEY
+# Hỗ trợ Dynamic Key Pool Load Balancer (Điền 1 hoặc nhiều API key cách nhau bằng dấu phẩy)
+GEMINI_API_KEYS=$GEMINI_KEYS
+GEMINI_API_KEY=$FIRST_KEY
 GEMINI_MODEL=gemini-2.5-flash-native-audio-latest
 GEMINI_VOICE=Aoede
 
@@ -105,11 +108,17 @@ ENV=production
 HOST=0.0.0.0
 PORT=8000
 EOF
-    echo -e "${GREEN}✅ Đã tạo file cấu hình mới tại: $ENV_FILE${NC}"
+    echo -e "${GREEN}✅ Đã tạo file cấu hình mới với Dynamic Key Pool tại: $ENV_FILE${NC}"
 else
     if [ -n "$1" ]; then
-        sed -i "s|^GEMINI_API_KEY=.*|GEMINI_API_KEY=$1|" "$ENV_FILE"
-        echo -e "${GREEN}✅ Đã cập nhật GEMINI_API_KEY mới vào: $ENV_FILE${NC}"
+        FIRST_KEY=$(echo "$1" | cut -d',' -f1 | cut -d';' -f1 | tr -d ' ')
+        if grep -q "^GEMINI_API_KEYS=" "$ENV_FILE"; then
+            sed -i "s|^GEMINI_API_KEYS=.*|GEMINI_API_KEYS=$1|" "$ENV_FILE"
+        else
+            echo "GEMINI_API_KEYS=$1" >> "$ENV_FILE"
+        fi
+        sed -i "s|^GEMINI_API_KEY=.*|GEMINI_API_KEY=$FIRST_KEY|" "$ENV_FILE"
+        echo -e "${GREEN}✅ Đã cập nhật Dynamic Key Pool (GEMINI_API_KEYS) mới vào: $ENV_FILE${NC}"
     else
         echo -e "${GREEN}✅ File $ENV_FILE đã tồn tại, giữ nguyên cấu hình hiện tại.${NC}"
     fi

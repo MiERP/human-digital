@@ -36,6 +36,7 @@ from memory_manager import MemoryManager
 from safety_guard import ChildSafetyGuard
 from search_engine import search_engine
 from emotion_engine import EmotionEngine, EMOTIONS, ENERGIES
+from key_pool import key_pool
 
 logging.basicConfig(
     level=logging.INFO,
@@ -507,22 +508,24 @@ def serve_config_page():
 
 @app.get("/health")
 def health_check():
+    pool_status = key_pool.get_pool_status()
     return {
         "status": "online",
         "service": "Digital Human AI English Tutor",
         "model": MODEL_NAME,
-        "has_api_key": bool(GEMINI_API_KEY)
+        "key_pool": pool_status,
+        "has_api_key": pool_status["total_keys"] > 0
     }
 
 @app.post("/api/test-connection")
 async def test_connection_endpoint(request: Request):
-    """Kiểm tra kết nối và tính hợp lệ của Gemini API Key từ Client."""
+    """Kiểm tra kết nối và tính hợp lệ của Gemini API Key từ Client hoặc Server Pool."""
     try:
         body = await request.json()
     except Exception:
         body = {}
     key_input = body.get("api_key", "").strip() if isinstance(body, dict) else ""
-    active_key = key_input if key_input else GEMINI_API_KEY
+    active_key = key_input if key_input else key_pool.acquire_key()
     if not active_key:
         return {
             "success": False,
@@ -535,13 +538,19 @@ async def test_connection_endpoint(request: Request):
             contents="ping",
             config={"max_output_tokens": 2}
         )
+        if not key_input:
+            key_pool.report_success(active_key)
+            key_pool.release_key(active_key)
         return {
             "success": True,
             "message": "Kết nối thành công! Máy chủ và Gemini API Key hoạt động bình thường.",
-            "source": "Custom App Key" if key_input else "Server Default Key"
+            "source": "Custom App Key" if key_input else "Server Key Pool",
+            "key_pool_status": key_pool.get_pool_status()
         }
     except Exception as e:
         logger.warning(f"Test connection error: {e}")
+        if not key_input:
+            key_pool.release_key(active_key)
         return {
             "success": False,
             "message": f"Kết nối máy chủ OK nhưng API Key không hợp lệ: {str(e)}"
@@ -706,11 +715,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
         # Client không gửi gói auth_init trong 0.8s đầu (ví dụ: client web cũ), tiếp tục với cấu hình mặc định
         pass
 
-    # Xác định API key hoạt động (ưu tiên client_api_key từ auth_init, fallback về GEMINI_API_KEY từ .env)
-    active_api_key = client_api_key if client_api_key else GEMINI_API_KEY
+    # Xác định API key hoạt động từ Dynamic Key Pool Load Balancer (hoặc BYOK từ client)
+    active_api_key = key_pool.acquire_key(client_api_key)
 
-    if not active_api_key or active_api_key.startswith("AIzaSy_YOUR_GEMINI") or active_api_key.strip() == "":
-        logger.error(f"[AUTH ERROR] Không có Gemini API Key hợp lệ! (Giá trị hiện tại: {active_api_key!r}). Vui lòng cấu hình GEMINI_API_KEY trong .env hoặc trên App.")
+    if not active_api_key:
+        logger.error("[AUTH ERROR] Không có Gemini API Key hợp lệ nào trong Key Pool! Vui lòng cấu hình GEMINI_API_KEYS trong .env hoặc trên App.")
         try:
             await websocket.send_text(json.dumps({
                 "error": "Chưa có Gemini API Key hợp lệ! Vui lòng chạm vào biểu tượng ⚙️ trên App hoặc mở file .env trên VPS để nhập API Key thật."
@@ -722,7 +731,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
     # Each child gets their own Doraemon (separate memory, progress, and search
     # cache). The Android app passes child_id in auth_init or WebSocket URL.
-    logger.info(f"Session bound to child_id={child_id} (API key source: {'client_auth_init' if client_api_key else 'server_env'}, key_prefix={active_api_key[:8]}...)")
+    logger.info(f"Session bound to child_id={child_id} (API key source: {'client_auth_init' if client_api_key else 'key_pool_balanced'}, key_prefix={active_api_key[:8]}...)")
     emotion_state = emotion_engine.start_session(child_id)
 
     # Vòng đời buổi trò chuyện: thời điểm bắt đầu + tổng kết chờ lưu khi kết thúc.
@@ -1256,6 +1265,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 task.cancel()
 
     except Exception as e:
+        err_str = str(e)
+        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+            if active_api_key:
+                key_pool.report_quota_error(active_api_key, cooldown_seconds=60.0)
         logger.error(f"WebSocket session error with Gemini Live: {e}", exc_info=True)
         try:
             await websocket.send_text(json.dumps({"error": str(e)}))
@@ -1263,6 +1276,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
         except Exception:
             pass
     finally:
+        if active_api_key:
+            key_pool.release_key(active_api_key)
         logger.info("WebSocket session closed.")
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@ services:
     env_file:
       - .env
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_API_KEYS=${GEMINI_API_KEYS:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-native-audio-latest}
       - GEMINI_VOICE=${GEMINI_VOICE:-Aoede}
       - ENABLE_TRANSCRIPTION=${ENABLE_TRANSCRIPTION:-true}
