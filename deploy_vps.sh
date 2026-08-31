@@ -77,7 +77,7 @@ echo -e "\n${CYAN}⚙️ [4/6] Khởi tạo tệp cấu hình môi trường .en
 mkdir -p "$APP_DIR/backend"
 mkdir -p "$APP_DIR/data"
 
-ENV_FILE="$APP_DIR/backend/.env"
+ENV_FILE="$APP_DIR/.env"
 
 if [ ! -f "$ENV_FILE" ]; then
     # Lấy API key từ đối số truyền vào hoặc dùng placeholder
@@ -114,6 +114,9 @@ else
         echo -e "${GREEN}✅ File $ENV_FILE đã tồn tại, giữ nguyên cấu hình hiện tại.${NC}"
     fi
 fi
+
+# Đồng bộ sang backend/.env để dùng cho local python nếu chạy ngoài docker
+cp -f "$ENV_FILE" "$APP_DIR/backend/.env" 2>/dev/null || true
 
 # 6. Cấu hình Nginx Reverse Proxy (Hỗ trợ WSS & Timeout 3600s)
 echo -e "\n${CYAN}🌐 [5/6] Thiết lập Nginx Web Server & WebSocket Routing...${NC}"

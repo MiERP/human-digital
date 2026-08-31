@@ -5,12 +5,14 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${PORT:-8000}:8000"
+    env_file:
+      - .env
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-native-audio-latest}
-      - GEMINI_VOICE=${GEMINI_VOICE:-Leda}
+      - GEMINI_VOICE=${GEMINI_VOICE:-Aoede}
       - ENABLE_TRANSCRIPTION=${ENABLE_TRANSCRIPTION:-true}
-      - ENABLE_AFFECTIVE_DIALOG=${ENABLE_AFFECTIVE_DIALOG:-true}
+      - ENABLE_AFFECTIVE_DIALOG=${ENABLE_AFFECTIVE_DIALOG:-false}
       - CLIENT_VAD_MODE=${CLIENT_VAD_MODE:-true}
       - VAD_START_SENSITIVITY=${VAD_START_SENSITIVITY:-high}
       - VAD_END_SENSITIVITY=${VAD_END_SENSITIVITY:-low}
