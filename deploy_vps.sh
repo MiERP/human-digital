@@ -107,7 +107,12 @@ PORT=8000
 EOF
     echo -e "${GREEN}✅ Đã tạo file cấu hình mới tại: $ENV_FILE${NC}"
 else
-    echo -e "${GREEN}✅ File $ENV_FILE đã tồn tại, giữ nguyên cấu hình hiện tại.${NC}"
+    if [ -n "$1" ]; then
+        sed -i "s|^GEMINI_API_KEY=.*|GEMINI_API_KEY=$1|" "$ENV_FILE"
+        echo -e "${GREEN}✅ Đã cập nhật GEMINI_API_KEY mới vào: $ENV_FILE${NC}"
+    else
+        echo -e "${GREEN}✅ File $ENV_FILE đã tồn tại, giữ nguyên cấu hình hiện tại.${NC}"
+    fi
 fi
 
 # 6. Cấu hình Nginx Reverse Proxy (Hỗ trợ WSS & Timeout 3600s)
