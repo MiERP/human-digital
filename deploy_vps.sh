@@ -27,14 +27,27 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
+# Tự động xác định thư mục chứa mã nguồn hiện tại
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="/opt/human-digital"
 VPS_IP=$(curl -s -4 ifconfig.me || hostname -I | awk '{print $1}')
 echo -e "${YELLOW}📍 Địa chỉ IP Máy Chủ VPS phát hiện:${NC} ${BOLD}${VPS_IP}${NC}"
+echo -e "${YELLOW}📂 Thư mục mã nguồn gốc:${NC} ${BOLD}${SCRIPT_DIR}${NC}"
+
+# Đồng bộ mã nguồn từ thư mục hiện tại sang /opt/human-digital nếu chạy từ nơi khác (vd: /root/human-digital)
+if [ "$SCRIPT_DIR" != "$APP_DIR" ]; then
+    echo -e "${CYAN}📋 Đang đồng bộ mã nguồn sang $APP_DIR...${NC}"
+    mkdir -p "$APP_DIR"
+    cp -rf "$SCRIPT_DIR"/* "$APP_DIR"/ 2>/dev/null || true
+fi
 
 # 2. Cập nhật hệ điều hành & cài đặt gói phụ trợ
 echo -e "\n${CYAN}📦 [1/6] Đang cập nhật hệ điều hành & cài đặt công cụ thiết yếu...${NC}"
-apt-get update -y
-apt-get install -y curl git ufw nginx certbot python3-certbot-nginx sqlite3 rsync
+apt-get update -y -qq
+apt-get install -y -qq curl git ufw nginx certbot python3-certbot-nginx sqlite3 rsync
 
 # 3. Cài đặt Docker & Docker Compose Plugin nếu chưa có
 echo -e "\n${CYAN}🐳 [2/6] Kiểm tra & Cài đặt Docker Engine...${NC}"
