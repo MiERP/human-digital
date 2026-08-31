@@ -699,12 +699,31 @@ fun TutorScreen(
         )
     }
 
+    // Định danh phần cứng bất biến cho thiết bị (Hardware Fingerprint)
+    val deviceFingerprint = remember {
+        val aid = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "default_aid"
+        val raw = "${aid}_${android.os.Build.MANUFACTURER}_${android.os.Build.MODEL}"
+        try {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(raw.toByteArray(Charsets.UTF_8))
+            digest.fold("") { str, it -> str + "%02x".format(it) }
+        } catch (e: Exception) {
+            raw.replace(" ", "_")
+        }
+    }
+    val deviceModel = remember { "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}" }
+    val androidVersion = remember { "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})" }
+    var bannedMessageDialog by remember { mutableStateOf<String?>(null) }
+
     // Khởi tạo Client WebSocket
-    val client = remember(serverUrl, childId, apiKey) {
+    val client = remember(serverUrl, childId, apiKey, deviceFingerprint) {
         GeminiLiveClient(
             serverUrl = serverUrl,
             childId = childId,
             apiKey = apiKey,
+            deviceFingerprint = deviceFingerprint,
+            deviceModel = deviceModel,
+            androidVersion = androidVersion,
             onAudioReceived = { audioBytes ->
                 runOnMain {
                     connectionState = ConnectionState.SPEAKING
@@ -786,6 +805,14 @@ fun TutorScreen(
                     if (mastered.isNotEmpty() || practice.isNotEmpty()) {
                         activeLearningCue = LearningWordCue(topic, mastered, practice)
                     }
+                }
+            },
+            onDeviceBanned = { reason ->
+                runOnMain {
+                    isSessionActive = false
+                    audioRecorderRef?.stopRecording()
+                    audioPlayer.stopAndFlush()
+                    bannedMessageDialog = reason
                 }
             }
         )
@@ -1079,6 +1106,44 @@ fun TutorScreen(
                     Button(
                         onClick = { showPrivacyInfoDialog = false },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+                    ) {
+                        Text("Đã hiểu", color = Color.White)
+                    }
+                }
+            )
+        }
+
+        // Dialog Thông Báo Thiết Bị Bị Tạm Khóa (Hardware Ban Notice)
+        if (bannedMessageDialog != null) {
+            AlertDialog(
+                onDismissRequest = { bannedMessageDialog = null },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🚫", fontSize = 22.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Tạm Dừng Kết Nối", fontWeight = FontWeight.Bold, color = Color(0xFFEF4444), fontSize = 16.sp)
+                    }
+                },
+                containerColor = Color(0xFF1E1B4B),
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = bannedMessageDialog ?: "Thiết bị này đã bị tạm dừng kết nối bởi Quản trị viên hệ thống.",
+                            fontSize = 13.sp,
+                            color = Color(0xFFE2E8F0)
+                        )
+                        Text(
+                            text = "💡 Mã phần cứng: ${deviceFingerprint.take(16)}...",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { bannedMessageDialog = null },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
                     ) {
                         Text("Đã hiểu", color = Color.White)
                     }

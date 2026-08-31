@@ -37,6 +37,7 @@ from safety_guard import ChildSafetyGuard
 from search_engine import search_engine
 from emotion_engine import EmotionEngine, EMOTIONS, ENERGIES
 from key_pool import key_pool
+from connection_tracker import connection_tracker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -506,6 +507,88 @@ def serve_config_page():
         return HTMLResponse(content=config_path.read_text(encoding="utf-8"))
     return HTMLResponse(content="<h1>config.html not found</h1>", status_code=404)
 
+@app.get("/admin", response_class=HTMLResponse)
+def serve_admin_dashboard():
+    """Bảng điều khiển Super Admin quản lý thiết bị và đàm thoại realtime."""
+    admin_path = STATIC_DIR / "admin.html"
+    if admin_path.exists():
+        return HTMLResponse(content=admin_path.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>admin.html not found</h1>", status_code=404)
+
+@app.get("/api/admin/overview")
+async def get_admin_overview(request: Request):
+    """API lấy toàn cảnh hệ thống: Live sessions, devices, key pool, metrics."""
+    verify_admin_key(request)
+    live_sessions = await connection_tracker.get_active_sessions()
+    all_devices = memory_manager.get_all_devices(limit=200)
+    device_metrics = memory_manager.get_device_metrics()
+    pool_status = key_pool.get_pool_status()
+
+    return {
+        "live_sessions": live_sessions,
+        "all_devices": all_devices,
+        "device_metrics": device_metrics,
+        "key_pool": pool_status
+    }
+
+class DeviceBlockRequest(BaseModel):
+    device_fingerprint: str
+    reason: Optional[str] = "Vi phạm chính sách hoặc quản trị viên tạm khóa"
+
+class DeviceUnblockRequest(BaseModel):
+    device_fingerprint: str
+
+class DeviceKickRequest(BaseModel):
+    device_fingerprint: str
+
+@app.post("/api/admin/devices/block")
+async def block_device_endpoint(data: DeviceBlockRequest, request: Request):
+    """Khóa vĩnh viễn thiết bị theo mã phần cứng và ngắt kết nối trực tiếp nếu đang online."""
+    verify_admin_key(request)
+    success = memory_manager.set_device_block_status(
+        data.device_fingerprint,
+        is_blocked=True,
+        reason=data.reason
+    )
+    # Ngắt tức thì mọi WebSocket session đang mở của thiết bị này
+    kicked = await connection_tracker.kick_by_fingerprint(
+        data.device_fingerprint,
+        reason=data.reason or "Thiết bị này đã bị tạm ngưng kết nối bởi Quản trị viên."
+    )
+    logger.warning(f"Admin BLOCKED device [{data.device_fingerprint[:16]}...] (Kicked {kicked} active sessions). Reason: {data.reason}")
+    return {
+        "success": success,
+        "device_fingerprint": data.device_fingerprint,
+        "kicked_sessions": kicked,
+        "message": "Đã khóa thiết bị bất biến và ngắt kết nối thành công."
+    }
+
+@app.post("/api/admin/devices/unblock")
+def unblock_device_endpoint(data: DeviceUnblockRequest, request: Request):
+    """Mở khóa cho thiết bị bất biến."""
+    verify_admin_key(request)
+    success = memory_manager.set_device_block_status(data.device_fingerprint, is_blocked=False)
+    logger.info(f"Admin UNBLOCKED device [{data.device_fingerprint[:16]}...]")
+    return {
+        "success": success,
+        "device_fingerprint": data.device_fingerprint,
+        "message": "Đã mở khóa thiết bị thành công."
+    }
+
+@app.post("/api/admin/devices/kick")
+async def kick_device_endpoint(data: DeviceKickRequest, request: Request):
+    """Ngắt kết nối WebSocket đang đàm thoại của thiết bị mà không khóa vĩnh viễn."""
+    verify_admin_key(request)
+    kicked = await connection_tracker.kick_by_fingerprint(
+        data.device_fingerprint,
+        reason="Quản trị viên đã ngắt phiên kết nối của bạn."
+    )
+    return {
+        "success": True,
+        "kicked_sessions": kicked,
+        "message": f"Đã ngắt {kicked} kết nối đang hoạt động."
+    }
+
 @app.get("/health")
 def health_check():
     pool_status = key_pool.get_pool_status()
@@ -688,6 +771,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
     # Mặc định child_id lấy từ query param nếu có
     child_id = _normalize_child_id(websocket.query_params.get("child_id"))
+    device_fingerprint = websocket.query_params.get("device_fingerprint", f"dev_{child_id}")
+    device_model = websocket.query_params.get("device_model", "Android Device")
+    android_version = websocket.query_params.get("android_version", "")
+    app_version = websocket.query_params.get("app_version", "")
+    client_ip = websocket.client.host if websocket.client else "unknown"
     client_api_key = None
     first_audio_bytes = None
 
@@ -706,6 +794,14 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         client_api_key = raw_key.strip()
                     if init_payload.get("child_id"):
                         child_id = _normalize_child_id(init_payload.get("child_id"))
+                    if init_payload.get("device_fingerprint"):
+                        device_fingerprint = str(init_payload.get("device_fingerprint")).strip()
+                    if init_payload.get("device_model"):
+                        device_model = str(init_payload.get("device_model")).strip()
+                    if init_payload.get("android_version"):
+                        android_version = str(init_payload.get("android_version")).strip()
+                    if init_payload.get("app_version"):
+                        app_version = str(init_payload.get("app_version")).strip()
                     logger.info("Received auth_init handshake packet from client.")
             except Exception as parse_err:
                 logger.debug(f"Non-json init message: {parse_err}")
@@ -714,6 +810,34 @@ async def websocket_live_endpoint(websocket: WebSocket):
     except asyncio.TimeoutError:
         # Client không gửi gói auth_init trong 0.8s đầu (ví dụ: client web cũ), tiếp tục với cấu hình mặc định
         pass
+
+    # KIỂM TRA KHÓA THIẾT BỊ BẤT BIẾN (Hardware Ban Enforcement)
+    is_blocked, block_reason = memory_manager.is_device_blocked(
+        device_fingerprint=device_fingerprint,
+        child_id=child_id,
+        ip=client_ip
+    )
+    if is_blocked:
+        logger.warning(f"🚫 BLOCKED DEVICE ATTEMPT: fingerprint={device_fingerprint[:16]}..., child_id={child_id}, ip={client_ip}")
+        try:
+            await websocket.send_text(json.dumps({
+                "event": "device_banned",
+                "reason": block_reason or "Thiết bị này đã bị tạm ngưng kết nối bởi Quản trị viên."
+            }))
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+        return
+
+    # Đăng ký / cập nhật thiết bị vào cơ sở dữ liệu
+    memory_manager.register_device(
+        device_fingerprint=device_fingerprint,
+        child_id=child_id,
+        device_model=device_model,
+        android_version=android_version,
+        app_version=app_version,
+        ip=client_ip
+    )
 
     # Xác định API key hoạt động từ Dynamic Key Pool Load Balancer (hoặc BYOK từ client)
     active_api_key = key_pool.acquire_key(client_api_key)
@@ -729,9 +853,22 @@ async def websocket_live_endpoint(websocket: WebSocket):
             pass
         return
 
+    # Theo dõi phiên kết nối Live cho Super Admin Dashboard
+    session_id = secrets.token_hex(8)
+    masked_key = (active_api_key[:8] + "...") if active_api_key else "***"
+    await connection_tracker.register(
+        session_id=session_id,
+        websocket=websocket,
+        child_id=child_id,
+        device_fingerprint=device_fingerprint,
+        device_model=device_model,
+        ip=client_ip,
+        key_masked=masked_key
+    )
+
     # Each child gets their own Doraemon (separate memory, progress, and search
     # cache). The Android app passes child_id in auth_init or WebSocket URL.
-    logger.info(f"Session bound to child_id={child_id} (API key source: {'client_auth_init' if client_api_key else 'key_pool_balanced'}, key_prefix={active_api_key[:8]}...)")
+    logger.info(f"Session [{session_id}] bound to child_id={child_id} (API key source: {'client_auth_init' if client_api_key else 'key_pool_balanced'}, key_prefix={active_api_key[:8]}...)")
     emotion_state = emotion_engine.start_session(child_id)
 
     # Vòng đời buổi trò chuyện: thời điểm bắt đầu + tổng kết chờ lưu khi kết thúc.
@@ -1276,9 +1413,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
         except Exception:
             pass
     finally:
+        await connection_tracker.unregister(session_id)
         if active_api_key:
             key_pool.release_key(active_api_key)
-        logger.info("WebSocket session closed.")
+        duration_sec = int(time.time() - session_started_at)
+        memory_manager.update_device_session_stats(device_fingerprint, duration_sec)
+        logger.info(f"WebSocket session [{session_id}] closed (Duration: {duration_sec}s).")
 
 if __name__ == "__main__":
     import uvicorn

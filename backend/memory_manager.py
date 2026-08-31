@@ -3,7 +3,7 @@ import json
 import sqlite3
 import secrets
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone, date, timedelta
 
 logger = logging.getLogger("digital-human-memory")
@@ -128,6 +128,26 @@ class MemoryManager:
                     FOREIGN KEY (child_id) REFERENCES child_profile (child_id) ON DELETE CASCADE
                 );
             """)
+
+            # 5. Bảng đăng ký thiết bị & quản lý khóa chặn phần cứng (Device Registry & Ban Engine)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS device_registry (
+                    device_fingerprint TEXT PRIMARY KEY,
+                    child_id TEXT NOT NULL,
+                    device_model TEXT,
+                    android_version TEXT,
+                    app_version TEXT,
+                    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_ip TEXT,
+                    is_blocked INTEGER DEFAULT 0,
+                    block_reason TEXT,
+                    total_sessions INTEGER DEFAULT 0,
+                    total_duration_sec INTEGER DEFAULT 0
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_dev_child ON device_registry(child_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_dev_blocked ON device_registry(is_blocked);")
 
             conn.commit()
             logger.info(f"Child Memory database initialized at: {self.db_path}")
@@ -873,3 +893,148 @@ class MemoryManager:
         })
 
         return topics
+
+    # ==================== Device Registry & Ban Methods ====================
+
+    def register_device(
+        self,
+        device_fingerprint: str,
+        child_id: str,
+        device_model: str = "",
+        android_version: str = "",
+        app_version: str = "",
+        ip: str = ""
+    ) -> Dict[str, Any]:
+        """Đăng ký hoặc cập nhật thông tin thiết bị khi kết nối."""
+        if not device_fingerprint:
+            device_fingerprint = f"legacy_{child_id}"
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM device_registry WHERE device_fingerprint = ?;", (device_fingerprint,))
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute("""
+                    UPDATE device_registry
+                    SET child_id = ?,
+                        device_model = COALESCE(NULLIF(?, ''), device_model),
+                        android_version = COALESCE(NULLIF(?, ''), android_version),
+                        app_version = COALESCE(NULLIF(?, ''), app_version),
+                        last_ip = COALESCE(NULLIF(?, ''), last_ip),
+                        last_seen_at = ?
+                    WHERE device_fingerprint = ?;
+                """, (child_id, device_model, android_version, app_version, ip, now_iso, device_fingerprint))
+            else:
+                cursor.execute("""
+                    INSERT INTO device_registry (
+                        device_fingerprint, child_id, device_model, android_version, app_version,
+                        first_seen_at, last_seen_at, last_ip, is_blocked, block_reason, total_sessions, total_duration_sec
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, 0);
+                """, (device_fingerprint, child_id, device_model, android_version, app_version, now_iso, now_iso, ip))
+
+            conn.commit()
+            cursor.execute("SELECT * FROM device_registry WHERE device_fingerprint = ?;", (device_fingerprint,))
+            return dict(cursor.fetchone())
+
+    def is_device_blocked(
+        self,
+        device_fingerprint: Optional[str] = None,
+        child_id: Optional[str] = None,
+        ip: Optional[str] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """Kiểm tra xem thiết bị hoặc child_id có đang bị chặn không."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 1. Kiểm tra theo device_fingerprint
+            if device_fingerprint:
+                cursor.execute("SELECT is_blocked, block_reason FROM device_registry WHERE device_fingerprint = ?;", (device_fingerprint,))
+                row = cursor.fetchone()
+                if row and row["is_blocked"]:
+                    return True, row["block_reason"] or "Thiết bị này đã bị tạm ngưng kết nối bởi Quản trị viên."
+
+            # 2. Kiểm tra theo child_id
+            if child_id:
+                cursor.execute("SELECT is_blocked, block_reason FROM device_registry WHERE child_id = ? AND is_blocked = 1;", (child_id,))
+                row = cursor.fetchone()
+                if row:
+                    return True, row["block_reason"] or "Hồ sơ của bé đã bị tạm khóa bởi Quản trị viên."
+
+            return False, None
+
+    def set_device_block_status(
+        self,
+        device_fingerprint: str,
+        is_blocked: bool,
+        reason: Optional[str] = None
+    ) -> bool:
+        """Khóa hoặc mở khóa một thiết bị bất biến."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE device_registry
+                SET is_blocked = ?,
+                    block_reason = ?
+                WHERE device_fingerprint = ?;
+            """, (1 if is_blocked else 0, reason if is_blocked else None, device_fingerprint))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_device_session_stats(self, device_fingerprint: str, duration_sec: int):
+        """Cập nhật số phiên và tổng thời lượng đàm thoại cho thiết bị."""
+        if not device_fingerprint:
+            return
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE device_registry
+                SET total_sessions = total_sessions + 1,
+                    total_duration_sec = total_duration_sec + ?,
+                    last_seen_at = ?
+                WHERE device_fingerprint = ?;
+            """, (max(0, duration_sec), now_iso, device_fingerprint))
+            conn.commit()
+
+    def get_all_devices(self, search: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Lấy danh sách thiết bị cho Admin Dashboard."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            query = """
+                SELECT d.*, p.name as child_name, p.age as child_age, p.learning_level
+                FROM device_registry d
+                LEFT JOIN child_profile p ON d.child_id = p.child_id
+            """
+            params = []
+            if search and search.strip():
+                query += " WHERE d.device_fingerprint LIKE ? OR d.child_id LIKE ? OR d.device_model LIKE ? OR d.last_ip LIKE ? OR p.name LIKE ?"
+                s = f"%{search.strip()}%"
+                params.extend([s, s, s, s, s])
+
+            query += " ORDER BY d.last_seen_at DESC LIMIT ?;"
+            params.append(limit)
+
+            cursor.execute(query, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_device_metrics(self) -> Dict[str, Any]:
+        """Thống kê tổng quan thiết bị cho KPI Cards."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM device_registry;")
+            total_devices = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM device_registry WHERE is_blocked = 1;")
+            blocked_devices = cursor.fetchone()[0]
+
+            cursor.execute("SELECT SUM(total_duration_sec) FROM device_registry;")
+            total_duration_sec = cursor.fetchone()[0] or 0
+
+            return {
+                "total_devices": total_devices,
+                "blocked_devices": blocked_devices,
+                "active_devices": max(0, total_devices - blocked_devices),
+                "total_hours_spoken": round(total_duration_sec / 3600.0, 1)
+            }
+

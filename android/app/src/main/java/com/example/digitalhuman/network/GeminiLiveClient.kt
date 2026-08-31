@@ -37,6 +37,9 @@ class GeminiLiveClient(
     private val serverUrl: String,
     private val childId: String,
     private val apiKey: String? = null,
+    private val deviceFingerprint: String? = null,
+    private val deviceModel: String? = null,
+    private val androidVersion: String? = null,
     private val onAudioReceived: (ByteArray) -> Unit,
     private val onStateChanged: (ConnectionState) -> Unit,
     private val onInterrupted: () -> Unit,
@@ -44,7 +47,8 @@ class GeminiLiveClient(
     private val onSessionEnded: (() -> Unit)? = null,
     private val onTurnComplete: (() -> Unit)? = null,
     private val onClarificationRequest: ((question: String, options: List<String>) -> Unit)? = null,
-    private val onLearningCue: ((topic: String, masteredWords: List<String>, needsPractice: List<String>) -> Unit)? = null
+    private val onLearningCue: ((topic: String, masteredWords: List<String>, needsPractice: List<String>) -> Unit)? = null,
+    private val onDeviceBanned: ((reason: String) -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "GeminiLiveClient"
@@ -102,12 +106,21 @@ class GeminiLiveClient(
                     val initPayload = JSONObject().apply {
                         put("action", "auth_init")
                         put("child_id", childId)
+                        if (!deviceFingerprint.isNullOrBlank()) {
+                            put("device_fingerprint", deviceFingerprint)
+                        }
+                        if (!deviceModel.isNullOrBlank()) {
+                            put("device_model", deviceModel)
+                        }
+                        if (!androidVersion.isNullOrBlank()) {
+                            put("android_version", androidVersion)
+                        }
                         if (!apiKey.isNullOrBlank()) {
                             put("api_key", apiKey.trim())
                         }
                     }
                     webSocket.send(initPayload.toString())
-                    Log.d(TAG, "Sent secure auth_init handshake payload.")
+                    Log.d(TAG, "Sent secure auth_init handshake payload with device fingerprint.")
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to send auth_init payload: ${e.message}", e)
                 }
@@ -124,6 +137,13 @@ class GeminiLiveClient(
                     val json = JSONObject(text)
                     if (json.has("event")) {
                         when (json.getString("event")) {
+                            "device_banned" -> {
+                                val reason = json.optString("reason", "Thiết bị này đã bị tạm ngưng kết nối bởi Quản trị viên.")
+                                Log.w(TAG, "Device banned event received: $reason")
+                                shouldReconnect = false
+                                updateState(ConnectionState.ERROR)
+                                onDeviceBanned?.invoke(reason)
+                            }
                             "emotion_update" -> {
                                 // Backend đẩy trạng thái cảm xúc/năng lượng mới.
                                 parseEmotion(json.optJSONObject("emotion"))
