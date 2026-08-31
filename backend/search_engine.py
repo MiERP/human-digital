@@ -83,7 +83,7 @@ class KnowledgeSearchEngine:
         }
     """
 
-    MAX_SNIPPET_CHARS = 400
+    MAX_SNIPPET_CHARS = 600
     CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1"
     WIKI_SUMMARY_URL = "https://simple.wikipedia.org/api/rest_v1/page/summary/{title}"
     WIKI_SEARCH_URL = (
@@ -351,7 +351,7 @@ class KnowledgeSearchEngine:
         req = urllib.request.Request(
             url, headers={"User-Agent": self.USER_AGENT}
         )
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         items = data.get("items", []) or []
@@ -433,7 +433,7 @@ class KnowledgeSearchEngine:
                 opensearch_url,
                 headers={"User-Agent": self.USER_AGENT},
             )
-            with urllib.request.urlopen(req, timeout=1.8) as resp:
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if len(data) >= 2 and data[1]:
                 return data[1]
@@ -452,7 +452,7 @@ class KnowledgeSearchEngine:
                 ft_url,
                 headers={"User-Agent": self.USER_AGENT},
             )
-            with urllib.request.urlopen(req, timeout=1.8) as resp:
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             search_items = data.get("query", {}).get("search", []) or []
             return [item.get("title") for item in search_items if item.get("title")]
@@ -482,8 +482,8 @@ class KnowledgeSearchEngine:
         if not titles:
             return []
 
-        # Bước 3: Lấy tóm tắt (Summary) song song qua REST API
-        selected_titles = titles[:top_k]
+        # Bước 3: Lấy tóm tắt (Summary) song song qua REST API (giới hạn tối đa 2 mục để tối ưu tốc độ)
+        selected_titles = titles[:min(top_k, 2)]
         summary_endpoint = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{{title}}"
         
         # Bắn đồng thời các request lấy tóm tắt để giảm độ trễ từ 3x xuống 1x
@@ -520,7 +520,7 @@ class KnowledgeSearchEngine:
                 url,
                 headers={"User-Agent": self.USER_AGENT},
             )
-            with urllib.request.urlopen(req, timeout=1.8) as resp:
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             extract = (data.get("extract") or "").strip()
             if not extract:

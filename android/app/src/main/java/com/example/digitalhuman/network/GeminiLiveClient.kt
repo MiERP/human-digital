@@ -79,16 +79,13 @@ class GeminiLiveClient(
             .pingInterval(10, TimeUnit.SECONDS)
             .build()
 
-        // Attach child_id và api_key (nếu có) as query parameters
+        // Attach child_id as query parameter (API key được truyền an toàn qua auth_init JSON, không để lộ qua URL)
         val httpUrl = serverUrl
             .replaceFirst("ws://", "http://")
             .replaceFirst("wss://", "https://")
-        val urlBuilder = httpUrl.toHttpUrl().newBuilder()
+        val url: HttpUrl = httpUrl.toHttpUrl().newBuilder()
             .addQueryParameter("child_id", childId)
-        if (!apiKey.isNullOrBlank()) {
-            urlBuilder.addQueryParameter("api_key", apiKey.trim())
-        }
-        val url: HttpUrl = urlBuilder.build()
+            .build()
 
         val request = Request.Builder()
             .url(url)
@@ -99,6 +96,21 @@ class GeminiLiveClient(
                 Log.d(TAG, "WebSocket connected successfully.")
                 reconnectAttempts = 0
                 updateState(ConnectionState.CONNECTED)
+
+                // Gửi gói tin auth_init bảo mật ngay sau khi mở kết nối
+                try {
+                    val initPayload = JSONObject().apply {
+                        put("action", "auth_init")
+                        put("child_id", childId)
+                        if (!apiKey.isNullOrBlank()) {
+                            put("api_key", apiKey.trim())
+                        }
+                    }
+                    webSocket.send(initPayload.toString())
+                    Log.d(TAG, "Sent secure auth_init handshake payload.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to send auth_init payload: ${e.message}", e)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {

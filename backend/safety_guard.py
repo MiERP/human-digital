@@ -3,11 +3,18 @@ import re
 import ipaddress
 import socket
 import logging
-from typing import Optional, Tuple
+import time
+from threading import Lock
+from typing import Optional, Tuple, Dict
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 
 logger = logging.getLogger("digital-human-safety")
+
+# Cache lưu trữ kết quả phân giải DNS để tránh blocking calls lặp lại (TTL 24 giờ)
+_DNS_CACHE: Dict[str, Tuple[float, bool]] = {}
+_DNS_CACHE_LOCK = Lock()
+_DNS_CACHE_TTL = 86400.0
 
 class ChildSafetyGuard:
     """
@@ -205,6 +212,17 @@ class ChildSafetyGuard:
                 logger.warning(f"SSRF Blocked: Domain not in kid whitelist: {hostname}")
                 return False
 
+            # Kiểm tra DNS cache trước để tránh blocking socket lookup
+            now = time.time()
+            with _DNS_CACHE_LOCK:
+                cached = _DNS_CACHE.get(hostname)
+                if cached is not None:
+                    expires_at, is_cached_safe = cached
+                    if expires_at > now:
+                        return is_cached_safe
+                    else:
+                        _DNS_CACHE.pop(hostname, None)
+
             # Phân giải DNS và kiểm tra toàn bộ địa chỉ IP được trả về
             addr_info = socket.getaddrinfo(hostname, None)
             for addr in addr_info:
@@ -213,7 +231,12 @@ class ChildSafetyGuard:
                 # Chặn 100% Private, Loopback, Link-Local, Multicast, Reserved IPs
                 if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
                     logger.critical(f"SSRF Alert: Domain {hostname} resolved to private/forbidden IP: {ip_str}")
+                    with _DNS_CACHE_LOCK:
+                        _DNS_CACHE[hostname] = (now + _DNS_CACHE_TTL, False)
                     return False
+
+            with _DNS_CACHE_LOCK:
+                _DNS_CACHE[hostname] = (now + _DNS_CACHE_TTL, True)
 
             return True
         except Exception as e:

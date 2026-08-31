@@ -127,8 +127,8 @@ fun displayHostFromWsUrl(wsUrl: String): String {
 class MainActivity : ComponentActivity() {
 
     companion object {
-        // Mặc định ban đầu nếu chưa có trong SharedPreferences
-        private const val DEFAULT_SERVER_WS_URL = "ws://192.168.0.3:8000/ws/live"
+        // Mặc định ban đầu nếu chưa có trong SharedPreferences (Trỏ thẳng vào VPS 103.20.102.229)
+        private const val DEFAULT_SERVER_WS_URL = "ws://103.20.102.229/ws/live"
 
         // SharedPreferences keys
         const val PREFS_NAME = "robo_setup_prefs"
@@ -212,6 +212,7 @@ fun AppRoot(
     var isSubmitting by remember { mutableStateOf(false) }
     var submitError by remember { mutableStateOf<String?>(null) }
     var showServerConfigDialog by remember { mutableStateOf(false) }
+    var showParentZoneDialog by remember { mutableStateOf(false) }
     var retryTrigger by remember { mutableStateOf(0) }
 
     val profileApi = remember(serverUrl) { ProfileApi(serverUrl) }
@@ -253,12 +254,24 @@ fun AppRoot(
         )
     }
 
+    if (showParentZoneDialog) {
+        ParentZoneDialog(
+            childId = childId,
+            serverUrl = serverUrl,
+            onDismiss = { showParentZoneDialog = false },
+            onProfileUpdated = {
+                retryTrigger++
+            }
+        )
+    }
+
     if (setupDone) {
         TutorScreen(
             serverUrl = serverUrl,
             apiKey = customApiKey,
             childId = childId,
             onOpenServerConfig = { showServerConfigDialog = true },
+            onOpenParentZone = { showParentZoneDialog = true },
             onResetSetup = {
                 scope.launch {
                     withContext(Dispatchers.IO) { profileApi.resetSetup(childId) }
@@ -272,12 +285,12 @@ fun AppRoot(
             SetupScreen(
                 serverUrl = serverUrl,
                 onOpenServerConfig = { showServerConfigDialog = true },
-                onComplete = { name, age, gender, hobbies, personality ->
+                onComplete = { name, age, gender, hobbies, personality, parentPin ->
                     isSubmitting = true
                     submitError = null
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) {
-                            profileApi.submitSetup(childId, name, age, gender, hobbies, personality)
+                            profileApi.submitSetup(childId, name, age, gender, hobbies, personality, parentPin)
                         }
                         if (ok) {
                             setupDone = true
@@ -556,6 +569,7 @@ fun TutorScreen(
     apiKey: String,
     childId: String,
     onOpenServerConfig: () -> Unit = {},
+    onOpenParentZone: () -> Unit = {},
     onResetSetup: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -996,16 +1010,34 @@ fun TutorScreen(
                 }
             }
 
-            // Nút Cài Đặt Dành Cho Phụ Huynh (Nhỏ gọn, kín đáo)
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.25f))
-                    .clickable { showSettingsMenu = true },
-                contentAlignment = Alignment.Center
+            // Nhóm nút Phụ Huynh & Cài Đặt Hệ Thống
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("⚙️", fontSize = 16.sp)
+                // Nút Mở "Góc Phụ Huynh"
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color.White.copy(alpha = 0.25f))
+                        .clickable { onOpenParentZone() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("👨‍👩‍👧 Phụ Huynh", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                }
+
+                // Nút Cài Đặt (IP Server & Reset)
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.25f))
+                        .clickable { showSettingsMenu = true },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("⚙️", fontSize = 15.sp)
+                }
             }
         }
 

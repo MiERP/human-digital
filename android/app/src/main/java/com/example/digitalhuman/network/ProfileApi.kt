@@ -1,4 +1,4 @@
-﻿package com.example.digitalhuman.network
+package com.example.digitalhuman.network
 
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -61,6 +61,7 @@ class ProfileApi(serverUrl: String) {
         gender: String,
         hobbies: List<String>,
         personality: String,
+        parentPin: String = "1234",
     ): Boolean {
         try {
             val payload = JSONObject()
@@ -69,6 +70,7 @@ class ProfileApi(serverUrl: String) {
                 .put("gender", gender)
                 .put("hobbies", org.json.JSONArray(hobbies))
                 .put("personality", personality)
+                .put("parent_pin", parentPin.trim())
 
             val url = "$baseUrl/api/child/setup?child_id=$childId"
             val request = Request.Builder()
@@ -81,7 +83,7 @@ class ProfileApi(serverUrl: String) {
 
             // Backend có thể đã có hồ sơ (v.d. app bị cài lại, đổi máy mới).
             // Khi đó POST trả về 409 -> reset cờ rồi ghi lại 1 lần nữa.
-            resetSetup(childId)
+            resetSetup(childId, parentPin)
             return client.newCall(request).execute().use { it.isSuccessful }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "submitSetup failed: ${e.message}")
@@ -89,14 +91,252 @@ class ProfileApi(serverUrl: String) {
         }
     }
 
-    fun resetSetup(childId: String): Boolean {
+    fun resetSetup(childId: String, pin: String = "1234"): Boolean {
         return try {
             val url = "$baseUrl/api/child/setup?child_id=$childId"
-            val request = Request.Builder().url(url).delete().build()
+            val request = Request.Builder()
+                .url(url)
+                .header("X-Parent-PIN", pin)
+                .delete()
+                .build()
             client.newCall(request).execute().use { it.isSuccessful }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "resetSetup failed: ${e.message}")
             false
+        }
+    }
+
+    /**
+     * Xác thực mã PIN phụ huynh để mở Góc Phụ Huynh trên thiết bị
+     */
+    fun verifyParentPin(childId: String, pin: String): Pair<Boolean, String> {
+        return try {
+            val url = "$baseUrl/api/child/verify-pin"
+            val payload = JSONObject()
+                .put("child_id", childId)
+                .put("pin", pin.trim())
+
+            val request = Request.Builder()
+                .url(url)
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val json = JSONObject(body)
+                    val valid = json.optBoolean("valid", false)
+                    val msg = json.optString("message", if (valid) "Mã PIN chính xác" else "Mã PIN không đúng")
+                    Pair(valid, msg)
+                } else {
+                    Pair(false, "Lỗi kiểm tra PIN: HTTP ${response.code}")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "verifyParentPin failed: ${e.message}")
+            Pair(false, "Lỗi kết nối: ${e.localizedMessage ?: e.message}")
+        }
+    }
+
+    /**
+     * Đổi mã PIN phụ huynh mới cho thiết bị
+     */
+    fun setParentPin(childId: String, oldPin: String, newPin: String): Pair<Boolean, String> {
+        return try {
+            val url = "$baseUrl/api/child/set-pin"
+            val payload = JSONObject()
+                .put("child_id", childId)
+                .put("old_pin", oldPin.trim())
+                .put("new_pin", newPin.trim())
+
+            val request = Request.Builder()
+                .url(url)
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val json = JSONObject(body)
+                    Pair(true, json.optString("message", "Đổi mã PIN thành công!"))
+                } else {
+                    val json = try { JSONObject(body) } catch (_: Exception) { null }
+                    val err = json?.optString("detail") ?: "Lỗi đổi mã PIN: HTTP ${response.code}"
+                    Pair(false, err)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "setParentPin failed: ${e.message}")
+            Pair(false, "Lỗi kết nối: ${e.localizedMessage ?: e.message}")
+        }
+    }
+
+    /**
+     * Lấy Báo Cáo Tiến Độ Học Tập & Huy Hiệu (Daily Digest)
+     */
+    fun getDailyDigest(childId: String): DailyDigestData? {
+        return try {
+            val url = "$baseUrl/api/child/digest?child_id=$childId"
+            val request = Request.Builder().url(url).get().build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                val json = JSONObject(body)
+
+                val masteredArr = json.optJSONArray("mastered_words")
+                val masteredList = mutableListOf<String>()
+                if (masteredArr != null) {
+                    for (i in 0 until masteredArr.length()) masteredList.add(masteredArr.getString(i))
+                }
+
+                val practiceArr = json.optJSONArray("needs_practice")
+                val practiceList = mutableListOf<String>()
+                if (practiceArr != null) {
+                    for (i in 0 until practiceArr.length()) practiceList.add(practiceArr.getString(i))
+                }
+
+                val badgesArr = json.optJSONArray("badges")
+                val badgeList = mutableListOf<BadgeItem>()
+                if (badgesArr != null) {
+                    for (i in 0 until badgesArr.length()) {
+                        val bObj = badgesArr.getJSONObject(i)
+                        badgeList.add(
+                            BadgeItem(
+                                id = bObj.optString("id"),
+                                title = bObj.optString("title"),
+                                icon = bObj.optString("icon", "🏅"),
+                                description = bObj.optString("description"),
+                                unlocked = bObj.optBoolean("unlocked", false)
+                            )
+                        )
+                    }
+                }
+
+                DailyDigestData(
+                    streakDays = json.optInt("streak_days", 0),
+                    totalSessions = json.optInt("total_sessions", 0),
+                    totalDurationSeconds = json.optInt("total_duration_seconds", 0),
+                    masteredWordsCount = json.optInt("mastered_words_count", 0),
+                    masteredWords = masteredList,
+                    needsPracticeWords = practiceList,
+                    pedagogicalAdvice = json.optString("pedagogical_advice", "Hãy cùng Doraemon học từ vựng mỗi ngày nhé!"),
+                    badges = badgeList
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "getDailyDigest failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Lấy toàn bộ hồ sơ chi tiết của bé (yêu cầu mã PIN)
+     */
+    fun getProfile(childId: String, pin: String): ChildProfileData? {
+        return try {
+            val url = "$baseUrl/api/child/profile?child_id=$childId"
+            val request = Request.Builder()
+                .url(url)
+                .header("X-Parent-PIN", pin)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                val json = JSONObject(body)
+
+                val hobbiesArr = json.optJSONArray("hobbies")
+                val hobbiesList = mutableListOf<String>()
+                if (hobbiesArr != null) {
+                    for (i in 0 until hobbiesArr.length()) hobbiesList.add(hobbiesArr.getString(i))
+                }
+
+                ChildProfileData(
+                    name = json.optString("name", "Bé"),
+                    nickname = json.optString("nickname", ""),
+                    age = json.optInt("age", 5),
+                    gender = json.optString("gender", "Nam"),
+                    hobbies = hobbiesList,
+                    personality = json.optString("personality", "Hiếu động"),
+                    learningLevel = json.optString("learning_level", "Starters"),
+                    favoriteColor = json.optString("favorite_color", "Xanh dương"),
+                    favoriteAnimal = json.optString("favorite_animal", "Mèo máy"),
+                    favoriteFood = json.optString("favorite_food", "Bánh rán"),
+                    parentPin = json.optString("parent_pin", pin)
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "getProfile failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Cập nhật hồ sơ bé từ Góc Phụ Huynh trên App (yêu cầu mã PIN)
+     */
+    fun updateProfileWithPin(
+        childId: String,
+        pin: String,
+        name: String,
+        age: Int,
+        gender: String,
+        hobbies: List<String>,
+        personality: String,
+        learningLevel: String = "Starters"
+    ): Pair<Boolean, String> {
+        return try {
+            val url = "$baseUrl/api/child/profile?child_id=$childId"
+            val payload = JSONObject()
+                .put("name", name)
+                .put("age", age)
+                .put("gender", gender)
+                .put("hobbies", org.json.JSONArray(hobbies))
+                .put("personality", personality)
+                .put("learning_level", learningLevel)
+                .put("parent_pin", pin.trim())
+
+            val request = Request.Builder()
+                .url(url)
+                .header("X-Parent-PIN", pin.trim())
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Pair(true, "Cập nhật hồ sơ thành công!")
+                } else {
+                    Pair(false, "Lỗi cập nhật: HTTP ${response.code}")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "updateProfileWithPin failed: ${e.message}")
+            Pair(false, "Lỗi kết nối: ${e.localizedMessage ?: e.message}")
+        }
+    }
+
+    /**
+     * Xóa vĩnh viễn toàn bộ dữ liệu của bé (Tuân thủ quyền riêng tư COPPA/GDPR)
+     */
+    fun deleteChildDataWithPin(childId: String, pin: String): Pair<Boolean, String> {
+        return try {
+            val url = "$baseUrl/api/child/data?child_id=$childId"
+            val request = Request.Builder()
+                .url(url)
+                .header("X-Parent-PIN", pin.trim())
+                .delete()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Pair(true, "Đã xóa sạch dữ liệu của bé.")
+                } else {
+                    Pair(false, "Lỗi xóa dữ liệu: HTTP ${response.code}")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "deleteChildDataWithPin failed: ${e.message}")
+            Pair(false, "Lỗi kết nối: ${e.localizedMessage ?: e.message}")
         }
     }
 
@@ -189,4 +429,37 @@ data class DiscoveryTopic(
     val tag: String,
     val description: String,
     val promptHint: String
+)
+
+data class DailyDigestData(
+    val streakDays: Int,
+    val totalSessions: Int,
+    val totalDurationSeconds: Int,
+    val masteredWordsCount: Int,
+    val masteredWords: List<String>,
+    val needsPracticeWords: List<String>,
+    val pedagogicalAdvice: String,
+    val badges: List<BadgeItem>
+)
+
+data class BadgeItem(
+    val id: String,
+    val title: String,
+    val icon: String,
+    val description: String,
+    val unlocked: Boolean
+)
+
+data class ChildProfileData(
+    val name: String,
+    val nickname: String,
+    val age: Int,
+    val gender: String,
+    val hobbies: List<String>,
+    val personality: String,
+    val learningLevel: String,
+    val favoriteColor: String,
+    val favoriteAnimal: String,
+    val favoriteFood: String,
+    val parentPin: String
 )

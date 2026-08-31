@@ -1,6 +1,7 @@
 import os
 import json
 import sqlite3
+import secrets
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone, date, timedelta
@@ -57,6 +58,7 @@ class MemoryManager:
                     hobbies TEXT,     -- JSON array: ["drawing", "swimming", "dinosaurs"]
                     learning_level TEXT DEFAULT 'Starters',
                     personality TEXT, -- Mô tả tính cách / phong cách giao tiếp của bé
+                    parent_pin TEXT DEFAULT '1234', -- Mã PIN 4 số bảo vệ Góc Phụ Huynh trên thiết bị
                     profile_completed INTEGER DEFAULT 0, -- 1 khi phụ huynh đã điền xong màn setup
                     streak_days INTEGER DEFAULT 0,       -- Chuỗi ngày học liên tiếp (Gamification)
                     last_active_date TEXT,               -- Ngày học gần nhất (YYYY-MM-DD)
@@ -71,6 +73,8 @@ class MemoryManager:
             existing_columns = {row["name"] for row in cursor.fetchall()}
             if "personality" not in existing_columns:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN personality TEXT;")
+            if "parent_pin" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN parent_pin TEXT DEFAULT '1234';")
             if "gender" not in existing_columns:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN gender TEXT;")
             if "profile_completed" not in existing_columns:
@@ -223,7 +227,7 @@ class MemoryManager:
         scalar_fields = {
             "name", "nickname", "age", "gender", "grade", "favorite_color",
             "favorite_animal", "favorite_food", "favorite_character",
-            "learning_level", "personality",
+            "learning_level", "personality", "parent_pin",
         }
         self.get_or_create_profile(child_id)
 
@@ -252,6 +256,36 @@ class MemoryManager:
 
             conn.commit()
             logger.info(f"Updated profile for {child_id} from parent config.")
+            return True
+
+    # ==================== Multi-Tenant Parent PIN Security ====================
+
+    def verify_parent_pin(self, child_id: str, pin: str) -> bool:
+        """Xác thực mã PIN của phụ huynh riêng cho từng thiết bị/child_id."""
+        if not pin:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT parent_pin FROM child_profile WHERE child_id = ?;", (child_id,))
+            row = cursor.fetchone()
+            stored_pin = (row["parent_pin"] if row and row["parent_pin"] else "1234").strip()
+            return secrets.compare_digest(stored_pin, str(pin).strip())
+
+    def set_parent_pin(self, child_id: str, new_pin: str) -> bool:
+        """Cập nhật mã PIN mới cho phụ huynh trên thiết bị."""
+        clean_pin = str(new_pin).strip()
+        if len(clean_pin) < 4:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.now(timezone.utc).isoformat()
+            self.get_or_create_profile(child_id)
+            cursor.execute(
+                "UPDATE child_profile SET parent_pin = ?, updated_at = ? WHERE child_id = ?;",
+                (clean_pin, now, child_id)
+            )
+            conn.commit()
+            logger.info(f"Updated parent PIN for child [{child_id}].")
             return True
 
     # ==================== First-Run Setup Methods ====================

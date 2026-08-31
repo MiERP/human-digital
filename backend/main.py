@@ -65,8 +65,8 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 # child data (COPPA/GDPR) to anyone who can reach the backend.
 _ADMIN_KEY_PLACEHOLDERS = {"", "change_me_in_production", "your_admin_api_key_here"}
 
-def verify_admin_key(request: Request):
-    """Fail-closed API key verification for parental/admin endpoints."""
+def verify_admin_key(request: Request) -> bool:
+    """Fail-closed API key verification for Master Admin endpoints."""
     if not ADMIN_API_KEY or ADMIN_API_KEY in _ADMIN_KEY_PLACEHOLDERS:
         logger.error(
             "ADMIN_API_KEY not configured. Admin endpoints are DISABLED until "
@@ -82,6 +82,32 @@ def verify_admin_key(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
     return True
 
+def verify_parent_or_admin(request: Request, child_id: str, pin: Optional[str] = None) -> bool:
+    """
+    Xác thực phân quyền linh hoạt cho môi trường Multi-Tenant dùng chung:
+    1. Cho phép Master Admin nếu khớp ADMIN_API_KEY từ server
+    2. HOẶC Cho phép Phụ huynh nếu khớp Parent PIN riêng của từng child_id
+    """
+    # 1. Kiểm tra Master Admin Key (nếu có)
+    admin_key = request.headers.get("X-Admin-Key") or request.query_params.get("admin_key")
+    if admin_key and ADMIN_API_KEY and ADMIN_API_KEY not in _ADMIN_KEY_PLACEHOLDERS:
+        if secrets.compare_digest(admin_key, ADMIN_API_KEY):
+            return True
+
+    # 2. Kiểm tra Parent PIN của riêng child_id
+    candidate_pin = (
+        pin
+        or request.headers.get("X-Parent-PIN")
+        or request.query_params.get("pin")
+    )
+    if candidate_pin and memory_manager.verify_parent_pin(child_id, candidate_pin):
+        return True
+
+    raise HTTPException(
+        status_code=401,
+        detail="Mã PIN phụ huynh hoặc Khóa quản trị không chính xác."
+    )
+
 class ChildProfileUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
     nickname: Optional[str] = Field(None, max_length=100)
@@ -94,8 +120,18 @@ class ChildProfileUpdate(BaseModel):
     favorite_character: Optional[str] = Field(None, max_length=50)
     learning_level: Optional[str] = Field(None, max_length=30)
     personality: Optional[str] = Field(None, max_length=500)
+    parent_pin: Optional[str] = Field(None, min_length=4, max_length=10)
     hobbies: Optional[List[str]] = None
     family_info: Optional[dict] = None
+
+class VerifyPinRequest(BaseModel):
+    child_id: str = "default_child"
+    pin: str = Field(..., min_length=4, max_length=10)
+
+class SetPinRequest(BaseModel):
+    child_id: str = "default_child"
+    old_pin: Optional[str] = None
+    new_pin: str = Field(..., min_length=4, max_length=10)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
@@ -511,10 +547,38 @@ async def test_connection_endpoint(request: Request):
             "message": f"Kết nối máy chủ OK nhưng API Key không hợp lệ: {str(e)}"
         }
 
+@app.post("/api/child/verify-pin")
+def verify_child_parent_pin(data: VerifyPinRequest):
+    """Xác thực mã PIN phụ huynh từ thiết bị để mở Góc Phụ Huynh."""
+    is_valid = memory_manager.verify_parent_pin(data.child_id, data.pin)
+    return {
+        "valid": is_valid,
+        "child_id": data.child_id,
+        "message": "Xác thực thành công!" if is_valid else "Mã PIN phụ huynh không chính xác."
+    }
+
+@app.post("/api/child/set-pin")
+def set_child_parent_pin(data: SetPinRequest, request: Request):
+    """Cập nhật mã PIN phụ huynh mới cho thiết bị."""
+    # Cho phép nếu là Master Admin HOẶC nếu đúng old_pin
+    is_admin = False
+    admin_key = request.headers.get("X-Admin-Key") or request.query_params.get("admin_key")
+    if admin_key and ADMIN_API_KEY and secrets.compare_digest(admin_key, ADMIN_API_KEY):
+        is_admin = True
+
+    if not is_admin:
+        if not data.old_pin or not memory_manager.verify_parent_pin(data.child_id, data.old_pin):
+            raise HTTPException(status_code=401, detail="Mã PIN cũ không chính xác.")
+
+    success = memory_manager.set_parent_pin(data.child_id, data.new_pin)
+    if not success:
+        raise HTTPException(status_code=400, detail="Mã PIN mới không hợp lệ (tối thiểu 4 ký tự).")
+    return {"status": "success", "message": "Đã đổi mã PIN phụ huynh thành công!"}
+
 @app.get("/api/child/profile")
 def get_child_profile(request: Request, child_id: str = "default_child"):
-    """Lấy thông tin hồ sơ của bé (Dành cho phụ huynh)"""
-    verify_admin_key(request)
+    """Lấy thông tin hồ sơ của bé (Xác thực qua Parent PIN hoặc Master Admin)"""
+    verify_parent_or_admin(request, child_id)
     return memory_manager.get_or_create_profile(child_id)
 
 @app.get("/api/child/digest")
@@ -533,12 +597,12 @@ def get_child_setup_status(child_id: str = "default_child"):
 
 @app.post("/api/child/setup")
 def complete_child_setup(data: ChildProfileUpdate, child_id: str = "default_child"):
-    """First-run setup: phụ huynh điền hồ sơ bé ngay trên app (không cần admin key).
-    Được phép ghi 1 lần; muốn sửa lại phải dùng endpoint admin /api/child/profile."""
+    """First-run setup: phụ huynh điền hồ sơ bé ngay trên app (kèm mã PIN tự đặt).
+    Được phép ghi 1 lần; muốn sửa lại phải dùng endpoint /api/child/profile có PIN."""
     if memory_manager.is_profile_completed(child_id):
         raise HTTPException(
             status_code=409,
-            detail="Profile already completed. Use the admin endpoint to update.",
+            detail="Profile already completed. Use the parent endpoint with PIN to update.",
         )
     update_dict = data.model_dump(exclude_none=True)
     memory_manager.update_profile(child_id, update_dict)
@@ -546,8 +610,9 @@ def complete_child_setup(data: ChildProfileUpdate, child_id: str = "default_chil
     return {"status": "success", "profile": memory_manager.get_or_create_profile(child_id)}
 
 @app.delete("/api/child/setup")
-def reset_child_setup(child_id: str = "default_child"):
-    """Reset cờ cấu hình để màn setup hiện lại. Không xóa dữ liệu hồ sơ/bộ nhớ."""
+def reset_child_setup(request: Request, child_id: str = "default_child"):
+    """Reset cờ cấu hình để màn setup hiện lại (Yêu cầu Parent PIN hoặc Master Admin)."""
+    verify_parent_or_admin(request, child_id)
     with memory_manager._get_connection() as conn:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
@@ -560,8 +625,8 @@ def reset_child_setup(child_id: str = "default_child"):
 
 @app.post("/api/child/profile")
 def update_child_profile(data: ChildProfileUpdate, request: Request, child_id: str = "default_child"):
-    """Phụ huynh trực tiếp cập nhật hồ sơ cá nhân hóa của bé"""
-    verify_admin_key(request)
+    """Phụ huynh trực tiếp cập nhật hồ sơ cá nhân hóa của bé (Xác thực Parent PIN)"""
+    verify_parent_or_admin(request, child_id, data.parent_pin)
     update_dict = data.model_dump(exclude_none=True)
     memory_manager.update_profile(child_id, update_dict)
     return {"status": "success", "profile": memory_manager.get_or_create_profile(child_id)}
@@ -569,13 +634,13 @@ def update_child_profile(data: ChildProfileUpdate, request: Request, child_id: s
 @app.get("/api/child/export")
 def export_child_data(request: Request, child_id: str = "default_child"):
     """Xuất toàn bộ dữ liệu của bé (Tuân thủ quyền riêng tư COPPA/GDPR)"""
-    verify_admin_key(request)
+    verify_parent_or_admin(request, child_id)
     return memory_manager.export_child_data(child_id)
 
 @app.delete("/api/child/data")
 def delete_child_data(request: Request, child_id: str = "default_child"):
     """Xóa vĩnh viễn toàn bộ dữ liệu của bé (Quyền được lãng quên)"""
-    verify_admin_key(request)
+    verify_parent_or_admin(request, child_id)
     memory_manager.delete_all_child_data(child_id)
     return {"status": "deleted", "message": "All data permanently removed."}
 
@@ -612,9 +677,37 @@ async def websocket_live_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Client connected to WebSocket.")
 
-    # Lấy API Key từ query params ?api_key=... nếu client truyền, nếu không lấy mặc định từ GEMINI_API_KEY (.env)
-    client_api_key = websocket.query_params.get("api_key")
-    active_api_key = client_api_key.strip() if client_api_key and client_api_key.strip() else GEMINI_API_KEY
+    # Mặc định child_id lấy từ query param nếu có
+    child_id = _normalize_child_id(websocket.query_params.get("child_id"))
+    client_api_key = None
+    first_audio_bytes = None
+
+    # Lắng nghe gói tin khởi tạo auth_init ban đầu (an toàn, không lộ API key qua URL log)
+    try:
+        init_message = await asyncio.wait_for(websocket.receive(), timeout=0.8)
+        if init_message.get("type") == "websocket.disconnect":
+            logger.info("Client disconnected during handshake.")
+            return
+        if "text" in init_message and init_message["text"]:
+            try:
+                init_payload = json.loads(init_message["text"])
+                if init_payload.get("action") == "auth_init":
+                    raw_key = init_payload.get("api_key")
+                    if raw_key and isinstance(raw_key, str) and raw_key.strip():
+                        client_api_key = raw_key.strip()
+                    if init_payload.get("child_id"):
+                        child_id = _normalize_child_id(init_payload.get("child_id"))
+                    logger.info("Received auth_init handshake packet from client.")
+            except Exception as parse_err:
+                logger.debug(f"Non-json init message: {parse_err}")
+        elif "bytes" in init_message and init_message["bytes"]:
+            first_audio_bytes = init_message["bytes"]
+    except asyncio.TimeoutError:
+        # Client không gửi gói auth_init trong 0.8s đầu (ví dụ: client web cũ), tiếp tục với cấu hình mặc định
+        pass
+
+    # Xác định API key hoạt động (ưu tiên client_api_key từ auth_init, fallback về GEMINI_API_KEY từ .env)
+    active_api_key = client_api_key if client_api_key else GEMINI_API_KEY
 
     if not active_api_key:
         await websocket.send_text(json.dumps({"error": "Chưa có Gemini API Key. Hãy cấu hình API Key trên App hoặc trên Server!"}))
@@ -622,9 +715,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
         return
 
     # Each child gets their own Doraemon (separate memory, progress, and search
-    # cache). The Android app passes ?child_id=... in the WebSocket URL.
-    child_id = _normalize_child_id(websocket.query_params.get("child_id"))
-    logger.info(f"Session bound to child_id={child_id} (API key source: {'client' if client_api_key else 'server'})")
+    # cache). The Android app passes child_id in auth_init or WebSocket URL.
+    logger.info(f"Session bound to child_id={child_id} (API key source: {'client_auth_init' if client_api_key else 'server_env'})")
     emotion_state = emotion_engine.start_session(child_id)
 
     # Vòng đời buổi trò chuyện: thời điểm bắt đầu + tổng kết chờ lưu khi kết thúc.
@@ -705,6 +797,23 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 "voice": VOICE_NAME,
                 "emotion": emotion_state,
             }))
+
+            if first_audio_bytes:
+                try:
+                    await session.send_realtime_input(
+                        audio=types.Blob(
+                            data=first_audio_bytes,
+                            mime_type="audio/pcm;rate=16000"
+                        )
+                    )
+                except TypeError:
+                    await session.send_realtime_input(
+                        media=types.Blob(
+                            data=first_audio_bytes,
+                            mime_type="audio/pcm;rate=16000"
+                        )
+                    )
+                first_audio_bytes = None
 
             # Task 1: Nhận audio từ Client -> Gửi qua send_realtime_input
             async def receive_from_client():
@@ -945,10 +1054,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     search_engine.search(
                                                         query, top_k=3, topic_hint=topic_hint, child_id=child_id
                                                     ),
-                                                    timeout=2.5,
+                                                    timeout=3.5,
                                                 )
                                             except asyncio.TimeoutError:
-                                                logger.warning(f"Search tool timed out after 2.5s for query '{query}'")
+                                                logger.warning(f"Search tool timed out after 3.5s for query '{query}'")
                                                 search_res = {
                                                     "success": False,
                                                     "results": [],

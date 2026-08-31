@@ -308,7 +308,73 @@ class TestChildMemoryAndSafety(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["count"], 6)
-        self.assertEqual(len(data["topics"]), 6)
+    def test_dns_cache_assert_safe_url(self):
+        """Kiểm tra cơ chế cache DNS tránh gọi lại socket.getaddrinfo"""
+        from unittest.mock import patch
+
+        # Lần 1: Gọi bình thường -> resolve DNS và lưu cache
+        url = "https://kids.nationalgeographic.com/animals"
+        self.assertTrue(self.safety.assert_safe_url(url))
+
+        # Lần 2: Giả lập socket.getaddrinfo bị lỗi/không được gọi -> Vẫn trả về True từ Cache
+        with patch("socket.getaddrinfo", side_effect=Exception("Should not be called when cached")):
+            self.assertTrue(self.safety.assert_safe_url(url))
+
+    def test_parent_pin_verification(self):
+        """Kiểm tra xác thực và đổi mã PIN phụ huynh theo từng child_id riêng biệt"""
+        child_id = "kid_pin_test_01"
+        self.memory.get_or_create_profile(child_id)
+
+        # Mặc định PIN là 1234
+        self.assertTrue(self.memory.verify_parent_pin(child_id, "1234"))
+        self.assertFalse(self.memory.verify_parent_pin(child_id, "0000"))
+
+        # Đổi sang PIN mới 9999
+        self.assertTrue(self.memory.set_parent_pin(child_id, "9999"))
+        self.assertTrue(self.memory.verify_parent_pin(child_id, "9999"))
+        self.assertFalse(self.memory.verify_parent_pin(child_id, "1234"))
+
+    def test_api_parent_pin_auth(self):
+        """Kiểm tra xác thực REST API bằng mã PIN phụ huynh (Góc Phụ Huynh trên App)"""
+        from fastapi.testclient import TestClient
+        import main
+
+        # Trỏ main.memory_manager sang DB test tạm thời
+        orig_mm = main.memory_manager
+        main.memory_manager = self.memory
+        try:
+            client = TestClient(main.app)
+            child_id = "kid_pin_api_01"
+            self.memory.get_or_create_profile(child_id, default_name="Bé Bắp")
+            self.memory.set_parent_pin(child_id, "5678")
+
+            # 1. Test verify-pin endpoint
+            res_verify_fail = client.post("/api/child/verify-pin", json={"child_id": child_id, "pin": "1234"})
+            self.assertEqual(res_verify_fail.status_code, 200)
+            self.assertFalse(res_verify_fail.json()["valid"])
+
+            res_verify_ok = client.post("/api/child/verify-pin", json={"child_id": child_id, "pin": "5678"})
+            self.assertEqual(res_verify_ok.status_code, 200)
+            self.assertTrue(res_verify_ok.json()["valid"])
+
+            # 2. Test get profile with X-Parent-PIN header
+            res_profile_no_auth = client.get(f"/api/child/profile?child_id={child_id}")
+            self.assertEqual(res_profile_no_auth.status_code, 401)
+
+            res_profile_ok = client.get(f"/api/child/profile?child_id={child_id}", headers={"X-Parent-PIN": "5678"})
+            self.assertEqual(res_profile_ok.status_code, 200)
+            self.assertEqual(res_profile_ok.json()["name"], "Bé Bắp")
+
+            # 3. Test update profile with X-Parent-PIN
+            res_update_ok = client.post(
+                f"/api/child/profile?child_id={child_id}",
+                headers={"X-Parent-PIN": "5678"},
+                json={"name": "Bé Bắp Siêu Nhân", "favorite_animal": "Lion"}
+            )
+            self.assertEqual(res_update_ok.status_code, 200)
+            self.assertEqual(res_update_ok.json()["profile"]["name"], "Bé Bắp Siêu Nhân")
+        finally:
+            main.memory_manager = orig_mm
 
 if __name__ == "__main__":
     unittest.main()

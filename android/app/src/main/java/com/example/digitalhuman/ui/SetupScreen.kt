@@ -61,7 +61,7 @@ import androidx.compose.ui.draw.clip
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SetupScreen(
-    onComplete: (String, Int, String, List<String>, String) -> Unit,
+    onComplete: (String, Int, String, List<String>, String, String) -> Unit,
     isSubmitting: Boolean,
     submitError: String?,
     serverUrl: String = "",
@@ -72,6 +72,7 @@ fun SetupScreen(
     var gender by remember { mutableStateOf("") }
     var hobbiesText by remember { mutableStateOf("") }
     var personalityText by remember { mutableStateOf("") }
+    var parentPin by remember { mutableStateOf("1234") }
 
     val hostDisplay = remember(serverUrl) {
         serverUrl
@@ -190,6 +191,34 @@ fun SetupScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Card 4: Mã PIN phụ huynh để bảo vệ Góc Phụ Huynh
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                SectionLabel("🔐 MÃ PIN PHỤ HUYNH (ĐỂ TRUY CẬP BÁO CÁO & CÀI ĐẶT)")
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = parentPin,
+                    onValueChange = { if (it.length <= 6) parentPin = it },
+                    placeholder = { Text("4 số (mặc định: 1234)", color = Color.Gray) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = textFieldColors()
+                )
+                Text(
+                    text = "Dùng để mở Góc Phụ Huynh xem tiến độ học tập và chỉnh sửa hồ sơ sau này.",
+                    fontSize = 11.sp,
+                    color = Color(0xFF64748B),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+
         if (submitError != null) {
             Spacer(modifier = Modifier.height(12.dp))
             Text(
@@ -211,7 +240,7 @@ fun SetupScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        val canSubmit = name.isNotBlank() && age in 3..15 && gender.isNotBlank()
+        val canSubmit = name.isNotBlank() && age in 3..15 && gender.isNotBlank() && parentPin.length >= 4
 
         Button(
             onClick = {
@@ -220,7 +249,7 @@ fun SetupScreen(
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
                     .distinct()
-                onComplete(name.trim(), age, gender, hobbies, personalityText.trim())
+                onComplete(name.trim(), age, gender, hobbies, personalityText.trim(), parentPin.trim())
             },
             enabled = canSubmit && !isSubmitting,
             modifier = Modifier
