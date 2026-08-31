@@ -709,14 +709,20 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # Xác định API key hoạt động (ưu tiên client_api_key từ auth_init, fallback về GEMINI_API_KEY từ .env)
     active_api_key = client_api_key if client_api_key else GEMINI_API_KEY
 
-    if not active_api_key:
-        await websocket.send_text(json.dumps({"error": "Chưa có Gemini API Key. Hãy cấu hình API Key trên App hoặc trên Server!"}))
-        await websocket.close()
+    if not active_api_key or active_api_key.startswith("AIzaSy_YOUR_GEMINI") or active_api_key.strip() == "":
+        logger.error(f"[AUTH ERROR] Không có Gemini API Key hợp lệ! (Giá trị hiện tại: {active_api_key!r}). Vui lòng cấu hình GEMINI_API_KEY trong .env hoặc trên App.")
+        try:
+            await websocket.send_text(json.dumps({
+                "error": "Chưa có Gemini API Key hợp lệ! Vui lòng chạm vào biểu tượng ⚙️ trên App hoặc mở file .env trên VPS để nhập API Key thật."
+            }))
+            await websocket.close(code=1008)
+        except Exception:
+            pass
         return
 
     # Each child gets their own Doraemon (separate memory, progress, and search
     # cache). The Android app passes child_id in auth_init or WebSocket URL.
-    logger.info(f"Session bound to child_id={child_id} (API key source: {'client_auth_init' if client_api_key else 'server_env'})")
+    logger.info(f"Session bound to child_id={child_id} (API key source: {'client_auth_init' if client_api_key else 'server_env'}, key_prefix={active_api_key[:8]}...)")
     emotion_state = emotion_engine.start_session(child_id)
 
     # Vòng đời buổi trò chuyện: thời điểm bắt đầu + tổng kết chờ lưu khi kết thúc.
@@ -1245,7 +1251,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 task.cancel()
 
     except Exception as e:
-        logger.error(f"WebSocket session error: {e}")
+        logger.error(f"WebSocket session error with Gemini Live: {e}", exc_info=True)
         try:
             await websocket.send_text(json.dumps({"error": str(e)}))
             await websocket.close()
