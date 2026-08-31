@@ -921,30 +921,35 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         logger.warning(f"Failed to forward video frame: {e}")
                             elif action == "child_emotion":
                                 # Nhận nhãn cảm xúc khuôn mặt từ Edge AI (Google ML Kit Face Detection trên điện thoại bé)
-                                child_facial_emotion = payload.get("emotion", "neutral")
+                                child_facial_emotion = payload.get("emotion", "attentive")
                                 confidence = payload.get("confidence", 0.0)
                                 now_ts = time.time()
                                 last_injected_ts = getattr(receive_from_client, '_last_emotion_injected_at', 0.0)
                                 last_emotion_val = getattr(receive_from_client, '_last_emotion', None)
 
-                                if child_facial_emotion and (child_facial_emotion != last_emotion_val or (now_ts - last_injected_ts) >= 30.0):
+                                is_state_changed = (child_facial_emotion != last_emotion_val)
+                                min_cooldown = 8.0 if is_state_changed else 25.0
+
+                                if child_facial_emotion and (is_state_changed or (now_ts - last_injected_ts) >= min_cooldown):
                                     receive_from_client._last_emotion = child_facial_emotion
                                     logger.info(f"Child Facial Emotion (Edge AI): {child_facial_emotion} (confidence={confidence:.2f})")
 
                                     emotion_context_map = {
-                                        "happy": "Bé đang cười rất tươi và hào hứng!",
-                                        "confused": "Bé đang có biểu cảm nhíu mày, bối rối hoặc gặp khó khăn. Hãy nhẹ nhàng gợi ý và động viên bé từng bước nhỏ.",
-                                        "sleepy": "Bé đang có biểu hiện mệt mỏi hoặc buồn ngủ. Hãy hỏi thăm ân cần và dịu dàng.",
+                                        "super_happy": "Bé đang cười rất tươi, toe toét và vô cùng thích thú! Hãy cười vui và khen ngợi năng lượng tuyệt vời của bé nhé!",
+                                        "happy": "Bé đang mỉm cười vui vẻ và phấn khởi!",
+                                        "curious": "Bé đang nghiêng đầu tò mò, suy nghĩ tìm câu trả lời. Hãy kiên nhẫn gợi mở từng bước!",
+                                        "attentive": "Bé đang mở to mắt chăm chú nhìn và lắng nghe bạn nói.",
                                         "focused": "Bé đang rất chăm chú và tập trung cúi nhìn sách/bài tập.",
-                                        "distracted": "Bé đang nhìn nghiêng hoặc hơi mất tập trung một chút. Hãy dùng giọng điệu vui tươi để thu hút sự chú ý của bé."
+                                        "distracted": "Bé đang nhìn quanh hoặc hơi lơ đãng. Hãy dùng một câu hỏi đố vui hoặc gọi tên bé để thu hút sự chú ý nhé!",
+                                        "sleepy": "Bé đang có biểu hiện mệt mỏi hoặc buồn ngủ. Hãy ân cần hỏi han xem bé có muốn nghỉ ngơi một chút không."
                                     }
                                     hint = emotion_context_map.get(child_facial_emotion)
-                                    # Chỉ gửi gợi ý cho model khi độ tin cậy cao (>= 0.65) và sau mỗi 30s
-                                    if hint and confidence >= 0.65 and (now_ts - last_injected_ts) >= 30.0:
+                                    # Gửi gợi ý cảm xúc cho model khi độ tin cậy >= 0.40 và đủ cooldown
+                                    if hint and confidence >= 0.40 and (now_ts - last_injected_ts) >= min_cooldown:
                                         receive_from_client._last_emotion_injected_at = now_ts
                                         try:
                                             await session.send_realtime_input(
-                                                text=f"\n[Quan sát trực tiếp từ camera: {hint}]\n"
+                                                text=f"\n[Quan sát cảm xúc bé trực tiếp qua camera: {hint}]\n"
                                             )
                                             logger.info(f"Injected facial emotion context into Gemini: {child_facial_emotion}")
                                         except Exception as e:

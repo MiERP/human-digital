@@ -18,10 +18,17 @@ import java.util.concurrent.Executors
 /**
  * Quản lý "Đôi Mắt Cảm Xúc" (Edge AI Emotional Vision) của Doraemon:
  * - Chạy ngầm phân tích khuôn mặt bé qua Camera trước bằng Google ML Kit.
- * - Xử lý 100% CỤC BỘ trên chip máy (Snapdragon 680), KHÔNG gửi hình ảnh lên mạng.
- * - Tần số phân tích: 2 FPS (500ms / frame), độ trễ suy luận chỉ ~12-18ms.
- * - Tự động trích xuất: Vui vẻ (Happy), Bối rối/Gặp khó (Confused), Buồn ngủ (Sleepy),
- *   Tập trung làm bài (Focused), Mất tập trung (Distracted), Bình thường (Neutral).
+ * - Xử lý 100% CỤC BỘ trên chip máy, KHÔNG gửi bất kỳ hình ảnh nào qua mạng (COPPA/GDPR).
+ * - Tần số phân tích: 4 FPS (250ms / frame) với độ trễ phản hồi < 1.0 giây.
+ * - Đa tầng nhận diện cảm xúc:
+ *   + super_happy: Cười lớn, rạng rỡ, thích thú
+ *   + happy: Mỉm cười, vui vẻ, tươi tắn
+ *   + curious: Nghiêng đầu tò mò, suy nghĩ
+ *   + attentive: Nhìn thẳng, chăm chú lắng nghe Doraemon
+ *   + focused: Cúi đầu tập trung nhìn sách/bài tập
+ *   + distracted: Quay đầu nhìn quanh, lơ đãng
+ *   + sleepy: Mắt nhắm li bì, buồn ngủ
+ *   + no_face: Không phát hiện bé trước ống kính
  */
 class FaceEmotionManager(
     private val context: Context,
@@ -29,7 +36,8 @@ class FaceEmotionManager(
 ) {
     companion object {
         private const val TAG = "FaceEmotionManager"
-        private const val INFERENCE_INTERVAL_MS = 500L // 2 FPS - siêu nhẹ cho CPU/Pin
+        private const val INFERENCE_INTERVAL_MS = 250L // 4 FPS - Cực nhanh & siêu mượt
+        private const val WINDOW_SIZE = 4 // Cửa sổ 1 giây để khử nhiễu chớp mắt
     }
 
     private val analysisExecutor = Executors.newSingleThreadExecutor()
@@ -40,17 +48,17 @@ class FaceEmotionManager(
     private var lastEmittedEmotion = ""
     private var lastEmitTime = 0L
 
-    // Bộ đệm trượt 6 khung hình (~3 giây) để lọc nhiễu chớp mắt và biểu cảm tức thời
-    private val emotionHistory = ArrayDeque<String>(8)
+    // Bộ đệm trượt 4 khung hình gần nhất (~1 giây)
+    private val emotionHistory = ArrayDeque<String>(WINDOW_SIZE + 2)
 
     init {
         // Cấu hình ML Kit Fast Mode tối ưu hóa cho vi xử lý di động
         val options = FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL) // Bật nhận diện cười & độ mở mắt
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL) // Nhận diện nụ cười & độ mở mắt
             .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
             .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
-            .setMinFaceSize(0.15f)
+            .setMinFaceSize(0.12f)
             .build()
         detector = FaceDetection.getClient(options)
     }
@@ -59,6 +67,7 @@ class FaceEmotionManager(
         if (isAnalyzing) return
         isAnalyzing = true
         emotionHistory.clear()
+        lastEmittedEmotion = ""
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
@@ -143,25 +152,26 @@ class FaceEmotionManager(
                         val smileProb = face.smilingProbability ?: -1f
                         val leftEye = face.leftEyeOpenProbability ?: -1f
                         val rightEye = face.rightEyeOpenProbability ?: -1f
-                        val pitch = face.headEulerAngleX // Đầu cúi xuống / ngửa lên
-                        val yaw = face.headEulerAngleY   // Đầu quay trái / phải
+                        val pitch = face.headEulerAngleX // Cúi xuống (<0) / Ngửa lên (>0)
+                        val yaw = face.headEulerAngleY   // Quay trái (<0) / Quay phải (>0)
+                        val roll = face.headEulerAngleZ  // Nghiêng đầu sang bên
 
-                        val rawEmotion = classifyRawFrame(smileProb, leftEye, rightEye, pitch, yaw)
-                        
+                        val rawEmotion = classifyRawFrame(smileProb, leftEye, rightEye, pitch, yaw, roll)
+
                         // Đưa vào sliding window
                         emotionHistory.addLast(rawEmotion)
-                        while (emotionHistory.size > 6) {
+                        while (emotionHistory.size > WINDOW_SIZE) {
                             emotionHistory.removeFirst()
                         }
 
-                        // Làm mượt (Temporal Smoothing) qua đa số phiếu trong 3 giây
+                        // Làm mượt (Temporal Smoothing) qua đa số phiếu trong 1 giây
                         val (smoothedEmotion, confidence) = computeSmoothedEmotion()
 
                         val timeSinceLastEmit = now - lastEmitTime
-                        if (smoothedEmotion != lastEmittedEmotion || timeSinceLastEmit >= 5000L) {
+                        if (smoothedEmotion != lastEmittedEmotion || timeSinceLastEmit >= 3000L) {
                             lastEmittedEmotion = smoothedEmotion
                             lastEmitTime = now
-                            Log.d(TAG, "Smoothed child emotion: $smoothedEmotion (confidence=$confidence, raw=$rawEmotion)")
+                            Log.d(TAG, "Child emotion detected: $smoothedEmotion (confidence=$confidence, smile=$smileProb, yaw=$yaw, pitch=$pitch, roll=$roll)")
                             onEmotionDetected(smoothedEmotion, confidence)
                         }
                     } else {
@@ -185,34 +195,50 @@ class FaceEmotionManager(
     }
 
     /**
-     * Phân loại thô cho 1 frame đơn lẻ.
+     * Phân loại đa tầng cảm xúc & hành vi từ các góc độ khuôn mặt.
      */
     private fun classifyRawFrame(
         smileProb: Float,
         leftEye: Float,
         rightEye: Float,
         pitch: Float,
-        yaw: Float
+        yaw: Float,
+        roll: Float
     ): String {
+        val avgEyeOpen = if (leftEye >= 0 && rightEye >= 0) (leftEye + rightEye) / 2f else 0.8f
+
         return when {
-            // Cười rõ ràng
-            smileProb > 0.60f -> "happy"
-            // Mắt nhắm hẳn
-            (leftEye in 0.0f..0.22f && rightEye in 0.0f..0.22f) -> "eye_closed"
-            // Cúi đầu nhìn sách
-            pitch < -20.0f -> "focused"
-            // Nhìn hẳn sang bên cạnh
-            Math.abs(yaw) > 35.0f -> "distracted"
-            // Nhìn bình thường vào màn hình
-            else -> "neutral"
+            // 1. Cười rạng rỡ / Thích thú
+            smileProb >= 0.65f -> "super_happy"
+
+            // 2. Mỉm cười / Vui vẻ thân thiện
+            smileProb in 0.30f..0.65f -> "happy"
+
+            // 3. Mắt nhắm li bì (Mệt mỏi / Buồn ngủ)
+            avgEyeOpen in 0.0f..0.22f -> "eye_closed"
+
+            // 4. Nghiêng đầu tò mò / Thắc mắc
+            Math.abs(roll) > 11.0f && smileProb < 0.25f -> "curious"
+
+            // 5. Cúi đầu nhìn sách/vở (Tập trung làm bài)
+            pitch < -16.0f -> "focused"
+
+            // 6. Quay đầu sang bên cạnh (Mất tập trung / Nhìn quanh)
+            Math.abs(yaw) > 22.0f -> "distracted"
+
+            // 7. Nhìn thẳng vào màn hình chăm chú lắng nghe
+            Math.abs(yaw) <= 15.0f && Math.abs(pitch) <= 15.0f && avgEyeOpen >= 0.40f -> "attentive"
+
+            // 8. Trạng thái tự nhiên
+            else -> "attentive"
         }
     }
 
     /**
-     * Tính toán cảm xúc ổn định qua đa số phiếu trong cửa sổ 6 frames (~3 giây).
+     * Tính toán cảm xúc ổn định qua đa số phiếu trong cửa sổ 4 frames (~1 giây).
      */
     private fun computeSmoothedEmotion(): Pair<String, Float> {
-        if (emotionHistory.isEmpty()) return Pair("neutral", 0.9f)
+        if (emotionHistory.isEmpty()) return Pair("attentive", 0.9f)
 
         val counts = mutableMapOf<String, Int>()
         for (e in emotionHistory) {
@@ -220,27 +246,25 @@ class FaceEmotionManager(
         }
         val total = emotionHistory.size.toFloat()
 
-        val happyCount = counts["happy"] ?: 0
-        if (happyCount >= 3) {
-            return Pair("happy", happyCount / total)
-        }
+        // Ưu tiên các cảm xúc mạnh & tích cực
+        val superHappy = counts["super_happy"] ?: 0
+        if (superHappy >= 2) return Pair("super_happy", superHappy / total)
 
-        val closedCount = counts["eye_closed"] ?: 0
-        // Chỉ coi là buồn ngủ khi mắt nhắm liên tục >= 5/6 frames (~2.5 giây liên tục, không phải chớp mắt!)
-        if (closedCount >= 5) {
-            return Pair("sleepy", closedCount / total)
-        }
+        val happy = counts["happy"] ?: 0
+        if (happy + superHappy >= 2) return Pair("happy", (happy + superHappy) / total)
 
-        val focusedCount = counts["focused"] ?: 0
-        if (focusedCount >= 4) {
-            return Pair("focused", focusedCount / total)
-        }
+        val closed = counts["eye_closed"] ?: 0
+        if (closed >= 3) return Pair("sleepy", closed / total)
 
-        val distractedCount = counts["distracted"] ?: 0
-        if (distractedCount >= 4) {
-            return Pair("distracted", distractedCount / total)
-        }
+        val curious = counts["curious"] ?: 0
+        if (curious >= 2) return Pair("curious", curious / total)
 
-        return Pair("neutral", (counts["neutral"] ?: 0) / total.coerceAtLeast(1.0f))
+        val focused = counts["focused"] ?: 0
+        if (focused >= 2) return Pair("focused", focused / total)
+
+        val distracted = counts["distracted"] ?: 0
+        if (distracted >= 2) return Pair("distracted", distracted / total)
+
+        return Pair("attentive", (counts["attentive"] ?: 0) / total.coerceAtLeast(1.0f))
     }
 }

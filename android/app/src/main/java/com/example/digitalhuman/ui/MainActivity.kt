@@ -995,13 +995,15 @@ fun TutorScreen(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = when (childDetectedEmotion) {
+                            "super_happy" -> "😆 Bé cười rất tươi!"
                             "happy" -> "😊 Bé đang vui"
-                            "confused" -> "🤔 Đang suy nghĩ"
-                            "sleepy" -> "🌙 Buồn ngủ"
-                            "focused" -> "✍️ Tập trung"
-                            "distracted" -> "👀 Nhìn quanh"
-                            "no_face" -> "👁️ Tìm bé..."
-                            else -> "👁️ Đang ngắm bé"
+                            "curious" -> "🤔 Nghiêng đầu tò mò"
+                            "attentive" -> "👀 Đang lắng nghe"
+                            "focused" -> "✍️ Tập trung học"
+                            "distracted" -> "🎈 Đang nhìn quanh"
+                            "sleepy" -> "🌙 Bé hơi buồn ngủ"
+                            "no_face" -> "🔍 Đang tìm bé..."
+                            else -> "👀 Đang lắng nghe"
                         },
                         color = Color.White,
                         fontSize = 11.sp,
