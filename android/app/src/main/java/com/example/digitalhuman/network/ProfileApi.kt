@@ -62,6 +62,9 @@ class ProfileApi(serverUrl: String) {
         hobbies: List<String>,
         personality: String,
         parentPin: String = "1234",
+        companionPersona: String = "",
+        companionName: String = "",
+        companionGender: String = "",
     ): Boolean {
         try {
             val payload = JSONObject()
@@ -71,6 +74,9 @@ class ProfileApi(serverUrl: String) {
                 .put("hobbies", org.json.JSONArray(hobbies))
                 .put("personality", personality)
                 .put("parent_pin", parentPin.trim())
+            if (companionPersona.isNotBlank()) payload.put("companion_persona", companionPersona)
+            if (companionName.isNotBlank()) payload.put("companion_name", companionName)
+            if (companionGender.isNotBlank()) payload.put("companion_gender", companionGender)
 
             val url = "$baseUrl/api/child/setup?child_id=$childId"
             val request = Request.Builder()
@@ -212,6 +218,17 @@ class ProfileApi(serverUrl: String) {
                     }
                 }
 
+                val planObj = json.optJSONObject("learning_plan")
+                val learningPlan = if (planObj != null) parsePlan(planObj) else null
+                val adherenceObj = json.optJSONObject("plan_adherence")
+                val adherence = if (adherenceObj != null) PlanAdherence(
+                    hasPlan = adherenceObj.optBoolean("has_plan", false),
+                    planned = adherenceObj.optInt("planned", 0),
+                    done = adherenceObj.optInt("done", 0),
+                    missed = adherenceObj.optInt("missed", 0),
+                    rate = adherenceObj.optDouble("rate", 0.0),
+                ) else null
+
                 DailyDigestData(
                     streakDays = json.optInt("streak_days", 0),
                     totalSessions = json.optInt("total_sessions", 0),
@@ -219,8 +236,10 @@ class ProfileApi(serverUrl: String) {
                     masteredWordsCount = json.optInt("mastered_words_count", 0),
                     masteredWords = masteredList,
                     needsPracticeWords = practiceList,
-                    pedagogicalAdvice = json.optString("pedagogical_advice", "Hãy cùng Doraemon học từ vựng mỗi ngày nhé!"),
-                    badges = badgeList
+                    pedagogicalAdvice = json.optString("pedagogical_advice", "Hãy cùng học từ vựng mỗi ngày nhé!"),
+                    badges = badgeList,
+                    learningPlan = learningPlan,
+                    planAdherence = adherence,
                 )
             }
         } catch (e: Exception) {
@@ -263,7 +282,10 @@ class ProfileApi(serverUrl: String) {
                     favoriteColor = json.optString("favorite_color", "Xanh dương"),
                     favoriteAnimal = json.optString("favorite_animal", "Mèo máy"),
                     favoriteFood = json.optString("favorite_food", "Bánh rán"),
-                    parentPin = json.optString("parent_pin", pin)
+                    parentPin = json.optString("parent_pin", pin),
+                    companionPersona = json.optString("companion_persona", ""),
+                    companionName = json.optString("companion_name", ""),
+                    companionGender = json.optString("companion_gender", "")
                 )
             }
         } catch (e: Exception) {
@@ -283,7 +305,10 @@ class ProfileApi(serverUrl: String) {
         gender: String,
         hobbies: List<String>,
         personality: String,
-        learningLevel: String = "Starters"
+        learningLevel: String = "Starters",
+        companionPersona: String = "",
+        companionName: String = "",
+        companionGender: String = "",
     ): Pair<Boolean, String> {
         return try {
             val url = "$baseUrl/api/child/profile?child_id=$childId"
@@ -295,6 +320,9 @@ class ProfileApi(serverUrl: String) {
                 .put("personality", personality)
                 .put("learning_level", learningLevel)
                 .put("parent_pin", pin.trim())
+            if (companionPersona.isNotBlank()) payload.put("companion_persona", companionPersona)
+            if (companionName.isNotBlank()) payload.put("companion_name", companionName)
+            if (companionGender.isNotBlank()) payload.put("companion_gender", companionGender)
 
             val request = Request.Builder()
                 .url(url)
@@ -408,6 +436,129 @@ class ProfileApi(serverUrl: String) {
         }
     }
 
+    /**
+     * Lấy danh sách nhân vật đồng hành dựng sẵn để bé tự chọn (/api/companions).
+     */
+    fun getCompanions(): List<CompanionInfo> {
+        return try {
+            val url = "$baseUrl/api/companions"
+            val request = Request.Builder().url(url).get().build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return fallbackCompanions()
+                val body = response.body?.string() ?: return fallbackCompanions()
+                val array = JSONObject(body).optJSONArray("companions") ?: return fallbackCompanions()
+                val list = mutableListOf<CompanionInfo>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    val paletteArr = obj.optJSONArray("palette")
+                    val palette = if (paletteArr != null) {
+                        (0 until paletteArr.length()).map { j -> paletteArr.optString(j, "#0288D1") }
+                    } else listOf("#0288D1")
+                    list.add(
+                        CompanionInfo(
+                            id = obj.optString("id", "boy_blue"),
+                            name = obj.optString("default_name", "Dora"),
+                            gender = obj.optString("gender", "male"),
+                            voice = obj.optString("voice", "Puck"),
+                            palette = palette,
+                            accessory = obj.optString("accessory", "cap"),
+                        )
+                    )
+                }
+                if (list.isEmpty()) fallbackCompanions() else list
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "getCompanions failed: ${e.message}")
+            fallbackCompanions()
+        }
+    }
+
+    private fun fallbackCompanions(): List<CompanionInfo> {
+        return listOf(
+            CompanionInfo("boy_blue", "Dora", "male", "Puck", listOf("#0288D1", "#4FC3F7", "#FFD54F"), "cap"),
+            CompanionInfo("boy_green", "Siro", "male", "Charon", listOf("#2E7D32", "#66BB6A", "#FFCA28"), "cap"),
+            CompanionInfo("girl_pink", "Miu", "female", "Aoede", listOf("#EC4899", "#F9A8D4", "#FDE68A"), "bow"),
+            CompanionInfo("girl_purple", "Luna", "female", "Kore", listOf("#8B5CF6", "#C4B5FD", "#FDE68A"), "bow"),
+        )
+    }
+
+    /**
+     * Lấy kế hoạch học tập hiện tại của bé (/api/child/plan, yêu cầu PIN).
+     */
+    fun getPlan(childId: String, pin: String): LearningPlanData? {
+        return try {
+            val url = "$baseUrl/api/child/plan?child_id=$childId"
+            val request = Request.Builder()
+                .url(url)
+                .header("X-Parent-PIN", pin)
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                val planObj = JSONObject(body).optJSONObject("plan") ?: return null
+                parsePlan(planObj)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "getPlan failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Phụ huynh xem/sửa kế hoạch học tập (/api/child/plan, yêu cầu PIN).
+     */
+    fun updatePlan(
+        childId: String,
+        pin: String,
+        days: List<String>,
+        startTime: String,
+        durationMinutes: Int,
+        focusTopics: List<String>,
+        weeklyGoal: String,
+        reminderEnabled: Boolean,
+    ): Pair<Boolean, String> {
+        return try {
+            val url = "$baseUrl/api/child/plan?child_id=$childId"
+            val payload = JSONObject()
+                .put("days", org.json.JSONArray(days))
+                .put("start_time", startTime)
+                .put("duration_minutes", durationMinutes)
+                .put("focus_topics", org.json.JSONArray(focusTopics))
+                .put("weekly_goal", weeklyGoal)
+                .put("reminder_enabled", reminderEnabled)
+                .put("is_active", true)
+            val request = Request.Builder()
+                .url(url)
+                .header("X-Parent-PIN", pin.trim())
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) Pair(true, "Đã lưu kế hoạch học tập!")
+                else Pair(false, "Lỗi lưu kế hoạch: HTTP ${response.code}")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "updatePlan failed: ${e.message}")
+            Pair(false, "Lỗi kết nối: ${e.localizedMessage ?: e.message}")
+        }
+    }
+
+    private fun parsePlan(obj: JSONObject): LearningPlanData {
+        val daysArr = obj.optJSONArray("days")
+        val days = if (daysArr != null) (0 until daysArr.length()).map { daysArr.optString(it, "") } else emptyList()
+        val topicsArr = obj.optJSONArray("focus_topics")
+        val topics = if (topicsArr != null) (0 until topicsArr.length()).map { topicsArr.optString(it, "") } else emptyList()
+        return LearningPlanData(
+            days = days,
+            startTime = obj.optString("start_time", "19:00"),
+            durationMinutes = obj.optInt("duration_minutes", 20),
+            focusTopics = topics,
+            weeklyGoal = obj.optString("weekly_goal", ""),
+            reminderEnabled = obj.optBoolean("reminder_enabled", true),
+            isActive = obj.optBoolean("is_active", true),
+        )
+    }
+
     private fun fallbackTopics(): List<DiscoveryTopic> {
         return listOf(
             DiscoveryTopic("dino", "Khủng Long Khổng Lồ", "Dinosaurs", "🦖", "#F472B6", "Muôn loài", "Khám phá sức mạnh T-Rex bạo chúa!", "[Bé vừa chọn khám phá chủ đề: Khủng Long Kỷ Jura.]"),
@@ -439,7 +590,9 @@ data class DailyDigestData(
     val masteredWords: List<String>,
     val needsPracticeWords: List<String>,
     val pedagogicalAdvice: String,
-    val badges: List<BadgeItem>
+    val badges: List<BadgeItem>,
+    val learningPlan: LearningPlanData? = null,
+    val planAdherence: PlanAdherence? = null,
 )
 
 data class BadgeItem(
@@ -461,5 +614,28 @@ data class ChildProfileData(
     val favoriteColor: String,
     val favoriteAnimal: String,
     val favoriteFood: String,
-    val parentPin: String
+    val parentPin: String,
+    val companionPersona: String = "",
+    val companionName: String = "",
+    val companionGender: String = "",
+)
+
+/** Kế hoạch học tập đã thống nhất giữa robot và bé. */
+data class LearningPlanData(
+    val days: List<String>,
+    val startTime: String,
+    val durationMinutes: Int,
+    val focusTopics: List<String>,
+    val weeklyGoal: String,
+    val reminderEnabled: Boolean,
+    val isActive: Boolean,
+)
+
+/** Mức độ tuân thủ kế hoạch trong tuần. */
+data class PlanAdherence(
+    val hasPlan: Boolean = false,
+    val planned: Int = 0,
+    val done: Int = 0,
+    val missed: Int = 0,
+    val rate: Double = 0.0,
 )

@@ -46,6 +46,7 @@ fun ParentZoneDialog(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val profileApi = remember(serverUrl) { ProfileApi(serverUrl) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var isUnlocked by remember { mutableStateOf(false) }
     var enteredPin by remember { mutableStateOf("") }
@@ -66,6 +67,8 @@ fun ParentZoneDialog(
     var editHobbies by remember { mutableStateOf("") }
     var editPersonality by remember { mutableStateOf("") }
     var editLevel by remember { mutableStateOf("Starters") }
+    var editCompanionId by remember { mutableStateOf("boy_blue") }
+    var editCompanionName by remember { mutableStateOf("") }
 
     // State đổi mã PIN
     var oldPinInput by remember { mutableStateOf("") }
@@ -87,6 +90,17 @@ fun ParentZoneDialog(
                     editHobbies = profile.hobbies.joinToString(", ")
                     editPersonality = profile.personality
                     editLevel = profile.learningLevel
+                    if (profile.companionPersona.isNotBlank()) editCompanionId = profile.companionPersona
+                    editCompanionName = profile.companionName
+                }
+                // Lên lịch nhắc nhở theo kế hoạch học tập (nếu có).
+                val plan = digest?.learningPlan
+                if (plan != null && plan.isActive && plan.reminderEnabled) {
+                    val name = profile?.companionName?.takeIf { it.isNotBlank() }
+                        ?: companionDefaultName(editCompanionId)
+                    ReminderScheduler.schedule(context, plan.days, plan.startTime, name)
+                } else if (digest != null) {
+                    ReminderScheduler.cancel(context)
                 }
                 isLoadingData = false
             }
@@ -264,9 +278,13 @@ fun ParentZoneDialog(
                                 editHobbies = editHobbies, onHobbiesChange = { editHobbies = it },
                                 editPersonality = editPersonality, onPersonalityChange = { editPersonality = it },
                                 editLevel = editLevel, onLevelChange = { editLevel = it },
+                                companionId = editCompanionId, onCompanionChange = { editCompanionId = it },
+                                companionName = editCompanionName, onCompanionNameChange = { editCompanionName = it },
                                 onSave = {
                                     coroutineScope.launch(Dispatchers.IO) {
                                         val hobbiesList = editHobbies.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                                        val companionGender = COMPANION_OPTIONS
+                                            .firstOrNull { it.first == editCompanionId }?.third ?: ""
                                         val (ok, msg) = profileApi.updateProfileWithPin(
                                             childId = childId,
                                             pin = enteredPin,
@@ -275,7 +293,10 @@ fun ParentZoneDialog(
                                             gender = editGender,
                                             hobbies = hobbiesList,
                                             personality = editPersonality,
-                                            learningLevel = editLevel
+                                            learningLevel = editLevel,
+                                            companionPersona = editCompanionId,
+                                            companionName = editCompanionName,
+                                            companionGender = companionGender
                                         )
                                         withContext(Dispatchers.Main) {
                                             statusMessage = msg
@@ -368,7 +389,43 @@ fun DashboardTab(digest: DailyDigestData?, onRefresh: () -> Unit) {
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Lời khuyên sư phạm từ Doraemon
+        // Kế hoạch học tập đã thống nhất + mức tuân thủ
+        digest.learningPlan?.let { plan ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("📅", fontSize = 18.sp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Kế Hoạch Học Tập", fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), fontSize = 14.sp)
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    val dayLabels = plan.days.joinToString(", ") { vnWeekday(it) }
+                    Text("Lịch: $dayLabels lúc ${plan.startTime} (~${plan.durationMinutes} phút)", color = Color(0xFFE2E8F0), fontSize = 13.sp)
+                    if (plan.weeklyGoal.isNotBlank()) {
+                        Text("Mục tiêu: ${plan.weeklyGoal}", color = Color(0xFFE2E8F0), fontSize = 13.sp)
+                    }
+                    if (plan.focusTopics.isNotEmpty()) {
+                        Text("Chủ đề: ${plan.focusTopics.joinToString(", ")}", color = Color(0xFFE2E8F0), fontSize = 13.sp)
+                    }
+                    digest.planAdherence?.let { ad ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Tuần này: ${ad.done}/${ad.planned} buổi đã hoàn thành",
+                            color = Color(0xFF10B981),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        // Lời khuyên sư phạm từ nhân vật đồng hành
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
@@ -476,6 +533,7 @@ fun BadgeRow(badge: BadgeItem) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfileTab(
     editName: String, onNameChange: (String) -> Unit,
@@ -484,6 +542,8 @@ fun ProfileTab(
     editHobbies: String, onHobbiesChange: (String) -> Unit,
     editPersonality: String, onPersonalityChange: (String) -> Unit,
     editLevel: String, onLevelChange: (String) -> Unit,
+    companionId: String, onCompanionChange: (String) -> Unit,
+    companionName: String, onCompanionNameChange: (String) -> Unit,
     onSave: () -> Unit,
     statusMessage: String?
 ) {
@@ -540,6 +600,28 @@ fun ProfileTab(
         OutlinedTextField(
             value = editLevel, onValueChange = onLevelChange,
             placeholder = { Text("Starters / Movers / Flyers", color = Color(0xFF64748B)) },
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 14.dp),
+            colors = customTextFieldColors()
+        )
+
+        // Nhân vật đồng hành (avatar dựng sẵn) + tên riêng
+        Text("Nhân vật đồng hành:", fontSize = 12.sp, color = Color(0xFF94A3B8), fontWeight = FontWeight.SemiBold)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            COMPANION_OPTIONS.forEach { (id, label, _) ->
+                FilterChip(
+                    selected = id == companionId,
+                    onClick = { onCompanionChange(id) },
+                    label = { Text(label, fontSize = 12.sp) }
+                )
+            }
+        }
+        OutlinedTextField(
+            value = companionName, onValueChange = onCompanionNameChange,
+            placeholder = { Text("Tên nhân vật (vd: Dora, Miu...)", color = Color(0xFF64748B)) },
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 14.dp),
             colors = customTextFieldColors()
         )
@@ -656,3 +738,31 @@ fun customTextFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedContainerColor = Color(0xFF1E293B),
     unfocusedContainerColor = Color(0xFF1E293B)
 )
+
+/** Bộ nhân vật đồng hành: (id, nhãn hiển thị, giới tính) — đồng bộ với backend. */
+private val COMPANION_OPTIONS = listOf(
+    Triple("boy_blue", "🧢 Dora", "male"),
+    Triple("boy_green", "🧢 Siro", "male"),
+    Triple("girl_pink", "🎀 Miu", "female"),
+    Triple("girl_purple", "🎀 Luna", "female"),
+)
+
+/** Tên mặc định của nhân vật theo id (dùng cho thông báo nhắc nhở). */
+private fun companionDefaultName(personaId: String): String = when (personaId) {
+    "boy_green" -> "Siro"
+    "girl_pink" -> "Miu"
+    "girl_purple" -> "Luna"
+    else -> "Dora"
+}
+
+/** Chuyển mã thứ trong tuần (mon..sun) sang nhãn tiếng Việt. */
+private fun vnWeekday(code: String): String = when (code.lowercase().take(3)) {
+    "mon" -> "Thứ Hai"
+    "tue" -> "Thứ Ba"
+    "wed" -> "Thứ Tư"
+    "thu" -> "Thứ Năm"
+    "fri" -> "Thứ Sáu"
+    "sat" -> "Thứ Bảy"
+    "sun" -> "Chủ Nhật"
+    else -> code
+}

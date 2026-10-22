@@ -32,15 +32,15 @@ class AudioPlayer(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
-        // Pre-buffer ~180ms audio trước khi phát để chống rách tiếng & jitter trên mạng WAN/VPS.
+        // Pre-buffer ~80ms audio trước khi phát để chống rách tiếng & jitter trên mạng WAN/VPS.
         private const val BYTES_PER_SECOND = SAMPLE_RATE * 2
-        private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 180 / 1000
+        private const val MIN_PREBUFFER_BYTES = BYTES_PER_SECOND * 80 / 1000
 
-        // Timeout pre-buffer tối đa để bắt đầu phát ngay cả khi stream chậm (250ms).
-        private const val MAX_PREBUFFER_WAIT_MS = 250L
+        // Timeout pre-buffer tối đa để bắt đầu phát ngay cả khi stream chậm (120ms).
+        private const val MAX_PREBUFFER_WAIT_MS = 120L
 
-        // Chu kỳ chờ xả sạch phần cứng sau khi nhận turn_complete từ server (~250ms).
-        private const val HARDWARE_DRAIN_CYCLES = 25
+        // Chu kỳ chờ xả sạch phần cứng sau khi nhận turn_complete từ server (~100ms).
+        private const val HARDWARE_DRAIN_CYCLES = 10
 
         // Khuếch đại âm lượng phát lại: 1.8x để giọng Doraemon to rõ nhưng không bị méo tiếng.
         private const val VOLUME_GAIN = 1.8f

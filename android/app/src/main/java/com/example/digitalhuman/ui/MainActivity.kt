@@ -66,6 +66,7 @@ import com.example.digitalhuman.network.GeminiLiveClient
 import com.example.digitalhuman.network.ProfileApi
 import com.example.digitalhuman.network.DiscoveryTopic
 import com.example.digitalhuman.network.RobotEmotion
+import com.example.digitalhuman.network.CompanionInfo
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
@@ -137,6 +138,13 @@ class MainActivity : ComponentActivity() {
         private const val KEY_SERVER_WS_URL = "server_ws_url"
         const val KEY_GEMINI_API_KEY = "gemini_api_key"
         const val KEY_EMOTION_VISION_ENABLED = "emotion_vision_enabled"
+        // Nhân vật đồng hành đã chọn (cache để hiển thị đúng tên/màu khi chưa kết nối).
+        const val KEY_COMPANION_ID = "companion_id"
+        const val KEY_COMPANION_NAME = "companion_name"
+        const val KEY_COMPANION_GENDER = "companion_gender"
+        const val KEY_COMPANION_VOICE = "companion_voice"
+        const val KEY_COMPANION_PALETTE = "companion_palette"
+        const val KEY_COMPANION_ACCESSORY = "companion_accessory"
     }
 
     /**
@@ -272,11 +280,15 @@ fun AppRoot(
             childId = childId,
             onOpenServerConfig = { showServerConfigDialog = true },
             onOpenParentZone = { showParentZoneDialog = true },
-            onResetSetup = {
+            onResetSetup = { pin ->
                 scope.launch {
-                    withContext(Dispatchers.IO) { profileApi.resetSetup(childId) }
-                    setupDone = false
-                    onSetupReset()
+                    val ok = withContext(Dispatchers.IO) { profileApi.resetSetup(childId, pin) }
+                    if (ok) {
+                        setupDone = false
+                        onSetupReset()
+                    } else {
+                        Toast.makeText(context, "PIN không đúng hoặc không kết nối được máy chủ.", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         )
@@ -285,12 +297,15 @@ fun AppRoot(
             SetupScreen(
                 serverUrl = serverUrl,
                 onOpenServerConfig = { showServerConfigDialog = true },
-                onComplete = { name, age, gender, hobbies, personality, parentPin ->
+                onComplete = { name, age, gender, hobbies, personality, parentPin, companionPersona, companionName, companionGender ->
                     isSubmitting = true
                     submitError = null
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) {
-                            profileApi.submitSetup(childId, name, age, gender, hobbies, personality, parentPin)
+                            profileApi.submitSetup(
+                                childId, name, age, gender, hobbies, personality, parentPin,
+                                companionPersona, companionName, companionGender
+                            )
                         }
                         if (ok) {
                             setupDone = true
@@ -570,7 +585,7 @@ fun TutorScreen(
     childId: String,
     onOpenServerConfig: () -> Unit = {},
     onOpenParentZone: () -> Unit = {},
-    onResetSetup: () -> Unit = {},
+    onResetSetup: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -583,12 +598,20 @@ fun TutorScreen(
     var robotAmplitude by remember { mutableFloatStateOf(0f) }
     var userVolume by remember { mutableFloatStateOf(0f) }
     var isSessionActive by remember { mutableStateOf(false) }
+    var sessionEndPending by remember { mutableStateOf(false) }
 
     // Đồng hồ ngủ: sau session_ended, đếm 120s chờ wake word rồi thoát app.
     var sleepJob by remember { mutableStateOf<Job?>(null) }
 
     // Trạng thái cảm xúc + năng lượng của Doraemon (do backend EmotionEngine đẩy về).
     var robotEmotion by remember { mutableStateOf(RobotEmotion()) }
+
+    // Bản sắc nhân vật đồng hành (tên/giới tính/bảng màu). Khởi tạo từ cache cục bộ,
+    // cập nhật lại khi backend gửi gói "ready".
+    val companionPrefs = remember {
+        context.getSharedPreferences(MainActivity.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    }
+    var companionInfo by remember { mutableStateOf(loadCachedCompanion(companionPrefs)) }
 
     // Encyclopedia Mode: state cho chip bar hỏi chủ đề
     var clarificationRequest by remember { mutableStateOf<ClarificationRequest?>(null) }
@@ -608,6 +631,7 @@ fun TutorScreen(
     var showSettingsMenu by remember { mutableStateOf(false) }
     // Xác nhận reset cấu hình (chống bé bấm nhầm khi đang chơi)
     var showResetConfirm by remember { mutableStateOf(false) }
+    var resetPin by remember { mutableStateOf("") }
 
     // Chiếc Túi Thần Kỳ - Menu Thẻ Chủ Đề Khám Phá ⭐
     var showTopicSheet by remember { mutableStateOf(false) }
@@ -623,6 +647,20 @@ fun TutorScreen(
             block()
         } else {
             mainHandler.post(block)
+        }
+    }
+
+    fun finishSessionAfterPlayback() {
+        if (!sessionEndPending) return
+        sessionEndPending = false
+        isSessionActive = false
+        connectionState = ConnectionState.SLEEPING
+        audioRecorderRef?.isMicListeningEnabled = false
+        sleepJob?.cancel()
+        sleepJob = scope.launch {
+            delay(SLEEP_TIMEOUT_MS)
+            Log.i(TAG, "Companion slept ${SLEEP_TIMEOUT_MS}ms — exiting app.")
+            (context as? Activity)?.finishAndRemoveTask()
         }
     }
 
@@ -677,19 +715,24 @@ fun TutorScreen(
             onOutputAmplitude = { amp ->
                 runOnMain {
                     robotAmplitude = amp
+                    // Báo biên độ loa cho recorder để tính ngưỡng barge-in thích ứng.
+                    audioRecorderRef?.updatePlaybackAmplitude(amp)
                 }
             },
             onPlaybackStateChanged = { isPlaying ->
                 runOnMain {
                     if (isPlaying) {
                         audioRecorderRef?.isPlaybackActive = true
-                        if (isSessionActive && connectionState != ConnectionState.SPEAKING && connectionState != ConnectionState.SLEEPING) {
+                        if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                             connectionState = ConnectionState.SPEAKING
-                            audioRecorderRef?.isMicListeningEnabled = false
+                            // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
+                            audioRecorderRef?.isMicListeningEnabled = true
                         }
                     } else {
                         audioRecorderRef?.onPlaybackFinished()
-                        if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
+                        if (sessionEndPending) {
+                            finishSessionAfterPlayback()
+                        } else if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                             connectionState = ConnectionState.LISTENING
                             audioRecorderRef?.isMicListeningEnabled = true
                         }
@@ -714,6 +757,13 @@ fun TutorScreen(
     val deviceModel = remember { "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}" }
     val androidVersion = remember { "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})" }
     var bannedMessageDialog by remember { mutableStateOf<String?>(null) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(context, "Cần cho phép thông báo để nhận lời nhắc giờ học.", Toast.LENGTH_LONG).show()
+        }
+    }
 
     // Khởi tạo Client WebSocket
     val client = remember(serverUrl, childId, apiKey, deviceFingerprint) {
@@ -727,7 +777,8 @@ fun TutorScreen(
             onAudioReceived = { audioBytes ->
                 runOnMain {
                     connectionState = ConnectionState.SPEAKING
-                    audioRecorderRef?.isMicListeningEnabled = false
+                    // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
+                    audioRecorderRef?.isMicListeningEnabled = true
                     audioRecorderRef?.onPlaybackChunkReceived()
                     audioPlayer.enqueueAudio(audioBytes)
                 }
@@ -740,8 +791,10 @@ fun TutorScreen(
                             audioRecorderRef?.isMicListeningEnabled = true
                         }
                         ConnectionState.SLEEPING -> {
-                            connectionState = ConnectionState.SLEEPING
                             audioRecorderRef?.isMicListeningEnabled = false
+                            if (!audioPlayer.isPlayingOrPending) {
+                                connectionState = ConnectionState.SLEEPING
+                            }
                         }
                         ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
                             connectionState = newState
@@ -756,7 +809,8 @@ fun TutorScreen(
                         ConnectionState.SPEAKING -> {
                             if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                                 connectionState = ConnectionState.SPEAKING
-                                audioRecorderRef?.isMicListeningEnabled = false
+                                // Giữ mic mở để hỗ trợ ngắt lời (barge-in).
+                                audioRecorderRef?.isMicListeningEnabled = true
                             }
                         }
                         else -> Unit
@@ -778,13 +832,9 @@ fun TutorScreen(
             onSessionEnded = {
                 runOnMain {
                     audioRecorderRef?.stopRecording()
-                    audioPlayer.stopAndFlush()
-                    isSessionActive = false
-                    sleepJob?.cancel()
-                    sleepJob = scope.launch {
-                        delay(SLEEP_TIMEOUT_MS)
-                        Log.i(TAG, "Doraemon slept ${SLEEP_TIMEOUT_MS}ms — exiting app.")
-                        (context as? Activity)?.finishAndRemoveTask()
+                    sessionEndPending = true
+                    if (!audioPlayer.isPlayingOrPending) {
+                        finishSessionAfterPlayback()
                     }
                 }
             },
@@ -813,6 +863,35 @@ fun TutorScreen(
                     audioRecorderRef?.stopRecording()
                     audioPlayer.stopAndFlush()
                     bannedMessageDialog = reason
+                }
+            },
+            onCompanionReady = { companion ->
+                runOnMain {
+                    companionInfo = companion
+                    saveCachedCompanion(companionPrefs, companion)
+                }
+            },
+            onPlanUpdated = { payload ->
+                runOnMain {
+                    try {
+                        val plan = org.json.JSONObject(payload).optJSONObject("plan")
+                        if (plan != null) {
+                            if (!plan.optBoolean("is_active", true) || !plan.optBoolean("reminder_enabled", true)) {
+                                ReminderScheduler.cancel(context)
+                            } else {
+                                val days = plan.optJSONArray("days")
+                                val weekdays = if (days != null) (0 until days.length()).map { days.optString(it) } else emptyList()
+                                ReminderScheduler.schedule(context, weekdays, plan.optString("start_time", "19:00"), companionInfo.name)
+                                if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not schedule updated learning plan", e)
+                    }
                 }
             }
         )
@@ -898,10 +977,11 @@ fun TutorScreen(
                 }
             },
             onSpeechStarted = {
-                client.notifyActivityStart()
+                // Chế độ hybrid: server tự phát hiện bắt đầu lượt, nên không cần gửi
+                // activity_start. Ở đây chỉ cần xử lý barge-in cục bộ cho mượt.
                 runOnMain {
                     if (connectionState == ConnectionState.SPEAKING || audioPlayer.isPlayingOrPending) {
-                        // Barge-in: bé nói xen vào khi Doraemon đang phát âm thanh -> dừng phát tức thì
+                        // Barge-in: bé nói xen vào khi Doraemon đang phát -> dừng phát tức thì.
                         audioPlayer.stopAndFlush()
                     }
                     if (connectionState != ConnectionState.SLEEPING) {
@@ -911,11 +991,13 @@ fun TutorScreen(
                 }
             },
             onSpeechEnded = {
-                client.notifyActivityEnd()
+                // Báo hết lượt nói để Gemini finalize NGAY (giảm lag chờ silence).
+                client.notifyAudioStreamEnd()
                 runOnMain {
                     if (connectionState != ConnectionState.SLEEPING) {
                         connectionState = ConnectionState.THINKING
-                        audioRecorderRef?.isMicListeningEnabled = false
+                        // Giữ mic mở để bé vẫn có thể ngắt lời khi Doraemon trả lời.
+                        audioRecorderRef?.isMicListeningEnabled = true
                     }
                 }
             }
@@ -923,6 +1005,7 @@ fun TutorScreen(
     }
 
     fun startSession() {
+        sessionEndPending = false
         isSessionActive = true
         setSpeakerphoneRouting(true)
         audioPlayer.start(scope)
@@ -931,6 +1014,7 @@ fun TutorScreen(
     }
 
     fun stopSession() {
+        sessionEndPending = false
         isSessionActive = false
         isCameraActive = false
         audioRecorder.stopRecording()
@@ -994,7 +1078,7 @@ fun TutorScreen(
                 Text("🐱", fontSize = 16.sp)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "DORAEMON",
+                    text = companionInfo.name.uppercase(),
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
@@ -1225,11 +1309,23 @@ fun TutorScreen(
                 onDismissRequest = { showResetConfirm = false },
                 containerColor = Color(0xFF0F172A),
                 title = { Text("Cấu hình lại hồ sơ bé?", fontWeight = FontWeight.Bold, color = Color.White) },
-                text = { Text("Màn hình cấu hình tên, tuổi, sở thích sẽ hiện lại. Dữ liệu trò chuyện hiện tại vẫn được giữ.", color = Color(0xFFCBD5E1)) },
+                text = {
+                    Column {
+                        Text("Màn hình cấu hình sẽ hiện lại. Dữ liệu trò chuyện vẫn được giữ. Nhập PIN phụ huynh để xác nhận.", color = Color(0xFFCBD5E1))
+                        OutlinedTextField(
+                            value = resetPin,
+                            onValueChange = { resetPin = it },
+                            label = { Text("PIN phụ huynh") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                        )
+                    }
+                },
                 confirmButton = {
                     TextButton(onClick = {
                         showResetConfirm = false
-                        onResetSetup()
+                        onResetSetup(resetPin)
+                        resetPin = ""
                     }) {
                         Text("Cấu hình lại", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold)
                     }
@@ -1249,11 +1345,12 @@ fun TutorScreen(
                 .fillMaxWidth(),
             contentAlignment = Alignment.Center
         ) {
-            // Doraemon Avatar 2D sống động với biểu cảm và hào quang
-            DoraemonAvatar(
+            // Avatar nhân vật đồng hành 2D sống động với biểu cảm và hào quang
+            CompanionAvatar(
                 state = connectionState,
                 amplitude = robotAmplitude,
                 emotion = robotEmotion,
+                companion = companionInfo,
             )
 
             // Thẻ Từ Vựng Học Tập Nổi Bật (Visual Learning Flashcard Overlay)
@@ -1347,7 +1444,8 @@ fun TutorScreen(
 
         // 3. Khung Thoại Manga Hoạt Hình (Comic Speech Bubble)
         MangaSpeechBubble(
-            text = getDoraemonSpeechText(connectionState, robotEmotion, isSessionActive, childDetectedEmotion),
+            text = getDoraemonSpeechText(connectionState, robotEmotion, isSessionActive, childDetectedEmotion)
+                .replace("Doraemon", companionInfo.name),
             state = connectionState,
             emotion = robotEmotion
         )
@@ -1491,6 +1589,34 @@ fun TutorScreen(
 /**
  * Tạo văn bản động cho khung thoại Manga theo trạng thái và cảm xúc của Doraemon.
  */
+/** Đọc nhân vật đồng hành đã cache để hiển thị đúng tên/màu trước khi kết nối. */
+private fun loadCachedCompanion(prefs: android.content.SharedPreferences): CompanionInfo {
+    val name = prefs.getString(MainActivity.KEY_COMPANION_NAME, null)
+    if (name.isNullOrBlank()) return CompanionInfo()
+    val paletteRaw = prefs.getString(MainActivity.KEY_COMPANION_PALETTE, null)
+    val palette = paletteRaw?.split("|")?.filter { it.isNotBlank() } ?: emptyList()
+    return CompanionInfo(
+        id = prefs.getString(MainActivity.KEY_COMPANION_ID, "boy_blue") ?: "boy_blue",
+        name = name,
+        gender = prefs.getString(MainActivity.KEY_COMPANION_GENDER, "male") ?: "male",
+        voice = prefs.getString(MainActivity.KEY_COMPANION_VOICE, "Puck") ?: "Puck",
+        palette = palette.ifEmpty { listOf("#0288D1", "#4FC3F7", "#FFD54F") },
+        accessory = prefs.getString(MainActivity.KEY_COMPANION_ACCESSORY, "cap") ?: "cap",
+    )
+}
+
+/** Lưu nhân vật đồng hành vào cache cục bộ. */
+private fun saveCachedCompanion(prefs: android.content.SharedPreferences, companion: CompanionInfo) {
+    prefs.edit()
+        .putString(MainActivity.KEY_COMPANION_ID, companion.id)
+        .putString(MainActivity.KEY_COMPANION_NAME, companion.name)
+        .putString(MainActivity.KEY_COMPANION_GENDER, companion.gender)
+        .putString(MainActivity.KEY_COMPANION_VOICE, companion.voice)
+        .putString(MainActivity.KEY_COMPANION_PALETTE, companion.palette.joinToString("|"))
+        .putString(MainActivity.KEY_COMPANION_ACCESSORY, companion.accessory)
+        .apply()
+}
+
 private fun getDoraemonSpeechText(
     state: ConnectionState,
     emotion: RobotEmotion,

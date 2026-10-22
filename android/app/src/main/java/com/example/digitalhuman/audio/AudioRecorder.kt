@@ -48,22 +48,30 @@ class AudioRecorder(
         // Giữ lại ~448ms audio (14 frames x 32ms) trước điểm bắt đầu nói để không mất âm tiết đầu (như "Có", "Dạ").
         private const val PRE_ROLL_FRAMES = 14
 
-        // Khoảng lặng để chốt kết thúc lượt nói: 20 frames x 32ms = ~640ms.
-        // Tối ưu cho on-device Silero VAD: phản hồi nhanh, không lag, vẫn đủ kiên nhẫn khi bé ngập ngừng.
-        private const val SILENCE_FRAMES_THRESHOLD = 20
+        // Khoảng lặng để chốt kết thúc lượt nói: 11 frames x 32ms = ~352ms.
+        // Ngắn hơn trước (640ms) để giảm lag phản hồi; Silero hangover đã set 300ms.
+        private const val SILENCE_FRAMES_THRESHOLD = 11
 
         // Chốt "bé bắt đầu nói" trong điều kiện bình thường: 2 frames (~64ms) để nhận diện nhanh.
         private const val SPEECH_ONSET_FRAMES_NORMAL = 2
 
+        // Khi loa ĐANG phát: cần onset dài (~320ms) + to hơn ngưỡng echo mới coi là
+        // bé ngắt lời thật (barge-in). Tránh tiếng vang/tiếng ồn kích hoạt ngắt lời giả.
+        private const val BARGE_IN_ONSET_FRAMES = 10
+
         // Trong 800ms ngay sau khi Doraemon phát âm thanh, cần 4 frames (~128ms) để
-        // triệt tiêu tuyệt đối rủi ro tiếng vang phòng (room reverb) kích hoạt giả mạo ngắt lời.
+        // triệt tiêu rủi ro tiếng vang phòng kích hoạt giả mạo ngắt lời.
         private const val SPEECH_ONSET_FRAMES_POST_PLAYBACK = 4
+
+        // Ngưỡng RMS tối thiểu để coi là barge-in thật khi loa đang phát.
+        private const val MIN_BARGE_RMS = 0.06f
 
         // Fallback khi Silero VAD không khởi tạo được.
         private const val RMS_FALLBACK_THRESHOLD = 0.035f
 
-        // Gia hạn echo gate sau khi Doraemon dứt lời thực tế trên loa (450ms) để tiêu tán toàn bộ tiếng vang phòng.
-        private const val PLAYBACK_GRACE_MS = 450L
+        // Gia hạn echo gate sau khi Doraemon dứt lời thực tế trên loa (150ms) —
+        // ngắn hơn trước (450ms) để giảm dead-air nhưng vẫn đủ chống vọng phòng.
+        private const val PLAYBACK_GRACE_MS = 150L
     }
 
     private var audioRecord: AudioRecord? = null
@@ -80,6 +88,10 @@ class AudioRecorder(
 
     @Volatile
     var isMicListeningEnabled = true
+
+    // Biên độ âm thanh loa đang phát (0..1) để tính ngưỡng barge-in thích ứng.
+    @Volatile
+    private var lastPlaybackAmplitude = 0f
 
     @Volatile
     private var playbackGraceUntil = 0L
@@ -133,7 +145,7 @@ class AudioRecorder(
                 .setFrameSize(FrameSize.FRAME_SIZE_512)
                 .setMode(Mode.AGGRESSIVE)
                 .setSpeechDurationMs(100)
-                .setSilenceDurationMs(700)
+                .setSilenceDurationMs(300)
                 .build()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -172,7 +184,11 @@ class AudioRecorder(
                 onInputVolume((rawRms * 4.0f).coerceIn(0.0f, 1.0f))
 
                 val now = System.currentTimeMillis()
-                val isGated = !isMicListeningEnabled || isPlaybackActive || now < playbackGraceUntil
+                // Micro chỉ bị tắt HẲN khi đang ngủ / mất kết nối. Trong lúc Doraemon
+                // nói, mic vẫn nghe để bé có thể ngắt lời (full-duplex barge-in).
+                val micDisabled = !isMicListeningEnabled
+                val playing = isPlaybackActive || now < playbackGraceUntil
+                val echoThreshold = (lastPlaybackAmplitude * 0.35f).coerceAtLeast(MIN_BARGE_RMS)
 
                 // Silero VAD phát hiện giọng nói từ audio đã qua lọc nhiễu
                 val vadInstance = vad
@@ -182,10 +198,10 @@ class AudioRecorder(
                     cleanRms > RMS_FALLBACK_THRESHOLD
                 }
 
-                if (isGated) {
-                    // Micro đang bị khoá (Doraemon đang suy nghĩ hoặc đang phát âm thanh):
-                    // KHÔNG nhận diện giọng nói, xóa sạch đệm pre-roll để không lọt tiếng vang loa hoặc tạp âm phòng.
-                    // Đặt userSpeaking = false mà KHÔNG gọi onSpeechEnded() để tránh gửi activity_end giả mạo làm Gemini bị interrupted!
+                if (micDisabled) {
+                    // Micro bị tắt hẳn (đang ngủ hoặc mất kết nối): bỏ toàn bộ frame.
+                    // Đặt userSpeaking = false mà KHÔNG gọi onSpeechEnded() để tránh
+                    // gửi tín hiệu kết thúc lượt giả mạo.
                     speechOnsetFrames = 0
                     silenceFrames = 0
                     preRoll.clear()
@@ -198,20 +214,23 @@ class AudioRecorder(
                             preRoll.removeFirst()
                         }
 
-                        // Debounce thích ứng: Trong 800ms sau khi Doraemon phát âm thanh, cần 4 frame (~128ms)
-                        // để chống tiếng vang phòng kích hoạt ngắt lời giả. Bình thường chỉ cần 2 frame (~64ms).
-                        val timeSincePlayback = now - lastPlaybackChunkTime
-                        val requiredOnset = if (timeSincePlayback < 800L) {
-                            SPEECH_ONSET_FRAMES_POST_PLAYBACK
-                        } else {
-                            SPEECH_ONSET_FRAMES_NORMAL
+                        // Debounce thích ứng:
+                        // - Loa đang phát (barge-in): cần onset dài (~320ms) VÀ to hơn
+                        //   ngưỡng echo mới coi là bé ngắt lời thật.
+                        // - Vừa dứt lời (<800ms): cần ~128ms chống vang phòng.
+                        // - Bình thường: ~64ms để phản hồi nhanh.
+                        val requiredOnset = when {
+                            playing -> BARGE_IN_ONSET_FRAMES
+                            now - lastPlaybackChunkTime < 800L -> SPEECH_ONSET_FRAMES_POST_PLAYBACK
+                            else -> SPEECH_ONSET_FRAMES_NORMAL
                         }
+                        val loudEnough = !playing || cleanRms > echoThreshold
 
-                        if (speechOnsetFrames >= requiredOnset) {
+                        if (speechOnsetFrames >= requiredOnset && loudEnough) {
                             userSpeaking = true
                             silenceFrames = 0
 
-                            // 1. Gửi signal activity_start TRƯỚC KHI gửi bất kỳ chunk audio nào
+                            // 1. Báo bắt đầu lượt (UI: nếu đang phát thì flush loa ngay).
                             onSpeechStarted()
 
                             // 2. Gửi các frame pre-roll đệm trước đó để không bị mất âm đầu
@@ -258,6 +277,15 @@ class AudioRecorder(
         val now = System.currentTimeMillis()
         lastPlaybackChunkTime = now
         playbackGraceUntil = now + PLAYBACK_GRACE_MS
+    }
+
+    /**
+     * AudioPlayer báo biên độ âm thanh đang phát (0..1). Dùng để tính ngưỡng
+     * barge-in thích ứng: bé phải nói to hơn tiếng loa (sau AEC) mới được coi
+     * là ngắt lời thật, tránh tiếng vang/ồn kích hoạt ngắt lời giả.
+     */
+    fun updatePlaybackAmplitude(amplitude: Float) {
+        lastPlaybackAmplitude = amplitude
     }
 
     /**

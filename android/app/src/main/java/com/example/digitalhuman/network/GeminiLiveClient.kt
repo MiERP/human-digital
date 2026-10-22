@@ -33,6 +33,16 @@ data class RobotEmotion(
     val fatigue: Double = 0.0,         // 0.0 -> 1.0
 )
 
+/** Bản sắc nhân vật đồng hành do backend gửi về trong gói "ready". */
+data class CompanionInfo(
+    val id: String = "boy_blue",
+    val name: String = "Dora",
+    val gender: String = "male",       // male | female
+    val voice: String = "Puck",
+    val palette: List<String> = listOf("#0288D1", "#4FC3F7", "#FFD54F"),
+    val accessory: String = "cap",     // cap | bow | none
+)
+
 class GeminiLiveClient(
     private val serverUrl: String,
     private val childId: String,
@@ -48,7 +58,9 @@ class GeminiLiveClient(
     private val onTurnComplete: (() -> Unit)? = null,
     private val onClarificationRequest: ((question: String, options: List<String>) -> Unit)? = null,
     private val onLearningCue: ((topic: String, masteredWords: List<String>, needsPractice: List<String>) -> Unit)? = null,
-    private val onDeviceBanned: ((reason: String) -> Unit)? = null
+    private val onDeviceBanned: ((reason: String) -> Unit)? = null,
+    private val onCompanionReady: ((CompanionInfo) -> Unit)? = null,
+    private val onPlanUpdated: ((String) -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "GeminiLiveClient"
@@ -205,11 +217,18 @@ class GeminiLiveClient(
                                 Log.d(TAG, "learning_cue: topic=$topic mastered=$mastered practice=$practice")
                                 onLearningCue?.invoke(topic, mastered, practice)
                             }
+                            "plan_updated" -> {
+                                // Robot vừa chốt kế hoạch học với bé — phụ huynh có thể xem/sửa.
+                                Log.d(TAG, "plan_updated received from backend.")
+                                onPlanUpdated?.invoke(text)
+                            }
                         }
                     } else if (json.has("status") && json.getString("status") == "ready") {
                         updateState(ConnectionState.LISTENING)
                         // Trạng thái cảm xúc khởi đầu gửi kèm trong gói "ready".
                         parseEmotion(json.optJSONObject("emotion"))
+                        // Bản sắc nhân vật đồng hành (tên/giới tính/bảng màu).
+                        parseCompanion(json.optJSONObject("companion"))
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing server message: $text", e)
@@ -289,6 +308,29 @@ class GeminiLiveClient(
             Log.d(TAG, "Sent activity_end signal.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send activity_end: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Chế độ hybrid: client-side VAD vừa phát hiện bé ngừng nói.
+     * Backend forward thành `audio_stream_end` — Gemini finalize lượt NGAY,
+     * bỏ qua độ trễ chờ silence của server (giảm lag phản hồi mạnh).
+     */
+    fun notifyAudioStreamEnd() {
+        val ws = webSocket
+        if (ws == null) {
+            Log.w(TAG, "notifyAudioStreamEnd: webSocket is null, dropping signal.")
+            return
+        }
+        if (currentState == ConnectionState.DISCONNECTED || currentState == ConnectionState.ERROR) {
+            Log.w(TAG, "notifyAudioStreamEnd: state=$currentState, dropping signal.")
+            return
+        }
+        try {
+            ws.send(JSONObject().put("action", "audio_stream_end").toString())
+            Log.d(TAG, "Sent audio_stream_end signal.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send audio_stream_end: ${e.message}", e)
         }
     }
 
@@ -421,6 +463,28 @@ class GeminiLiveClient(
             onEmotionChanged?.invoke(emotion)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse emotion state: ${e.message}")
+        }
+    }
+
+    private fun parseCompanion(json: org.json.JSONObject?) {
+        if (json == null) return
+        try {
+            val paletteArr = json.optJSONArray("palette")
+            val palette: List<String> = if (paletteArr != null) {
+                (0 until paletteArr.length()).mapNotNull { i -> paletteArr.optString(i, null) }
+            } else emptyList()
+            val companion = CompanionInfo(
+                id = json.optString("id", "boy_blue"),
+                name = json.optString("name", "Dora"),
+                gender = json.optString("gender", "male"),
+                voice = json.optString("voice", "Puck"),
+                palette = palette.ifEmpty { listOf("#0288D1", "#4FC3F7", "#FFD54F") },
+                accessory = json.optString("accessory", "cap"),
+            )
+            Log.d(TAG, "Companion: ${companion.name} (${companion.id}/${companion.gender})")
+            onCompanionReady?.invoke(companion)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse companion: ${e.message}")
         }
     }
 }
