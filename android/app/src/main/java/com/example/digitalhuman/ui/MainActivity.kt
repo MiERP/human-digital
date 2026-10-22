@@ -42,6 +42,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
@@ -70,6 +72,7 @@ import com.example.digitalhuman.network.ProfileApi
 import com.example.digitalhuman.network.DiscoveryTopic
 import com.example.digitalhuman.network.RobotEmotion
 import com.example.digitalhuman.network.CompanionInfo
+import com.example.digitalhuman.network.mergeCompanionName
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
@@ -225,6 +228,10 @@ fun AppRoot(
     var showServerConfigDialog by remember { mutableStateOf(false) }
     var showParentZoneDialog by remember { mutableStateOf(false) }
     var retryTrigger by remember { mutableStateOf(0) }
+    val companionPrefs = remember {
+        context.getSharedPreferences(MainActivity.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    }
+    var selectedCompanion by remember { mutableStateOf(loadCachedCompanion(companionPrefs)) }
 
     val profileApi = remember(serverUrl) { ProfileApi(serverUrl) }
 
@@ -241,6 +248,14 @@ fun AppRoot(
                 onSetupDone()
             }
             isCheckingBackend = false
+        } else {
+            val chosen = withContext(Dispatchers.IO) {
+                profileApi.getSelectedCompanion(childId)
+            }
+            if (chosen != null) {
+                selectedCompanion = chosen
+                saveCachedCompanion(companionPrefs, chosen)
+            }
         }
     }
 
@@ -281,6 +296,7 @@ fun AppRoot(
             serverUrl = serverUrl,
             apiKey = customApiKey,
             childId = childId,
+            initialCompanion = selectedCompanion,
             onOpenServerConfig = { showServerConfigDialog = true },
             onOpenParentZone = { showParentZoneDialog = true },
             onResetSetup = { pin ->
@@ -586,6 +602,7 @@ fun TutorScreen(
     serverUrl: String,
     apiKey: String,
     childId: String,
+    initialCompanion: CompanionInfo = CompanionInfo(),
     onOpenServerConfig: () -> Unit = {},
     onOpenParentZone: () -> Unit = {},
     onResetSetup: (String) -> Unit = {},
@@ -614,7 +631,9 @@ fun TutorScreen(
     val companionPrefs = remember {
         context.getSharedPreferences(MainActivity.PREFS_NAME, android.content.Context.MODE_PRIVATE)
     }
-    var companionInfo by remember { mutableStateOf(loadCachedCompanion(companionPrefs)) }
+    var companionInfo by remember { mutableStateOf(initialCompanion) }
+    LaunchedEffect(initialCompanion) { companionInfo = initialCompanion }
+    val currentChosenCompanion by rememberUpdatedState(initialCompanion)
 
     // Encyclopedia Mode: state cho chip bar hỏi chủ đề
     var clarificationRequest by remember { mutableStateOf<ClarificationRequest?>(null) }
@@ -870,8 +889,9 @@ fun TutorScreen(
             },
             onCompanionReady = { companion ->
                 runOnMain {
-                    companionInfo = companion
-                    saveCachedCompanion(companionPrefs, companion)
+                    val selected = mergeCompanionName(currentChosenCompanion, companion)
+                    companionInfo = selected
+                    saveCachedCompanion(companionPrefs, selected)
                 }
             },
             onPlanUpdated = { payload ->
@@ -933,9 +953,9 @@ fun TutorScreen(
     ) { isGranted ->
         if (isGranted) {
             isCameraActive = true
-            Toast.makeText(context, "👁️ Đã bật Mắt Thần! Hãy giơ tranh vẽ hoặc đồ vật cho Doraemon xem nhé!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "👁️ Đã bật Mắt Thần! Hãy giơ tranh vẽ hoặc đồ vật cho ${companionInfo.name} xem nhé!", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "Cần cấp quyền Camera để Doraemon có thể nhìn thấy đồ vật/bài tập của bé!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Cần cấp quyền Camera để ${companionInfo.name} có thể nhìn thấy đồ vật/bài tập của bé!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1033,7 +1053,7 @@ fun TutorScreen(
         if (isGranted) {
             startSession()
         } else {
-            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với Doraemon!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với ${companionInfo.name}!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1063,17 +1083,22 @@ fun TutorScreen(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         // 1. Header Bầu trời, Chỉ Báo Minh Bạch Camera & Menu Phụ Huynh
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
             // Huy hiệu cùng nhân vật với icon ứng dụng và màn trò chuyện.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color.White.copy(alpha = 0.25f))
                     .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -1089,45 +1114,11 @@ fun TutorScreen(
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 1.sp
+                    letterSpacing = 1.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
-            }
-
-            // CHỈ BÁO MINH BẠCH: "Đôi Mắt Cảm Xúc" (Hiển thị khi Camera trước đang cảm nhận bé)
-            if (isSessionActive && isEmotionVisionEnabled && !isCameraActive) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Color.White.copy(alpha = 0.35f))
-                        .clickable { showPrivacyInfoDialog = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    // Chấm xanh bảo mật phát sáng (Privacy Green Dot)
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF10B981))
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = when (childDetectedEmotion) {
-                            "super_happy" -> "😆 Bé cười rất tươi!"
-                            "happy" -> "😊 Bé đang vui"
-                            "curious" -> "🤔 Nghiêng đầu tò mò"
-                            "attentive" -> "👀 Đang lắng nghe"
-                            "focused" -> "✍️ Tập trung học"
-                            "distracted" -> "🎈 Đang nhìn quanh"
-                            "sleepy" -> "🌙 Bé hơi buồn ngủ"
-                            "no_face" -> "🔍 Đang tìm bé..."
-                            else -> "👀 Đang lắng nghe"
-                        },
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
 
             // Nhóm nút Phụ Huynh & Cài Đặt Hệ Thống
@@ -1159,6 +1150,37 @@ fun TutorScreen(
                     Text("⚙️", fontSize = 15.sp)
                 }
             }
+          }
+          // Camera status stays on a separate line so a chosen name never crowds controls.
+          if (isSessionActive && isEmotionVisionEnabled && !isCameraActive) {
+              Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                      .clip(RoundedCornerShape(20.dp))
+                      .background(Color.White.copy(alpha = 0.35f))
+                      .clickable { showPrivacyInfoDialog = true }
+                      .padding(horizontal = 10.dp, vertical = 6.dp)
+              ) {
+                  Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                      text = when (childDetectedEmotion) {
+                          "super_happy" -> "😆 Bé cười rất tươi!"
+                          "happy" -> "😊 Bé đang vui"
+                          "curious" -> "🤔 Nghiêng đầu tò mò"
+                          "attentive" -> "👀 Đang lắng nghe"
+                          "focused" -> "✍️ Tập trung học"
+                          "distracted" -> "🎈 Đang nhìn quanh"
+                          "sleepy" -> "🌙 Bé hơi buồn ngủ"
+                          "no_face" -> "🔍 Đang tìm bé..."
+                          else -> "👀 Đang lắng nghe"
+                      },
+                      color = Color.White,
+                      fontSize = 11.sp,
+                      fontWeight = FontWeight.Bold,
+                  )
+              }
+          }
         }
 
         // Dialog Giải Thích Quyền Riêng Tư khi chạm vào Chỉ Báo Camera
@@ -1166,13 +1188,13 @@ fun TutorScreen(
             AlertDialog(
                 onDismissRequest = { showPrivacyInfoDialog = false },
                 title = {
-                    Text("🔒 Đôi Mắt Doraemon & Quyền Riêng Tư", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+                    Text("🔒 Đôi Mắt ${companionInfo.name} & Quyền Riêng Tư", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
                 },
                 containerColor = Color(0xFF0F172A),
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "Doraemon đang sử dụng Camera trước để quan sát nụ cười và cảm xúc của bé, giúp bạn robot trò chuyện thấu cảm và thân thiện hơn.",
+                            text = "${companionInfo.name} đang sử dụng Camera trước để quan sát nụ cười và cảm xúc của bé, giúp bạn robot trò chuyện thấu cảm và thân thiện hơn.",
                             fontSize = 13.sp,
                             color = Color(0xFFE2E8F0)
                         )
@@ -1580,6 +1602,7 @@ fun TutorScreen(
         TopicDiscoveryModal(
             topics = discoveryTopics,
             isLoading = isLoadingTopics,
+            companionName = companionInfo.name,
             onDismiss = { showTopicSheet = false },
             onRefresh = { loadDiscoveryTopics() },
             onTopicSelected = { topic ->
@@ -1599,7 +1622,9 @@ fun TutorScreen(
 /** Đọc nhân vật đồng hành đã cache để hiển thị đúng tên/màu trước khi kết nối. */
 private fun loadCachedCompanion(prefs: android.content.SharedPreferences): CompanionInfo {
     val name = prefs.getString(MainActivity.KEY_COMPANION_NAME, null)
-    if (name.isNullOrBlank()) return CompanionInfo()
+    if (name.isNullOrBlank() || name.equals("null", ignoreCase = true)) {
+        return CompanionInfo(name = "Bạn Robot")
+    }
     val paletteRaw = prefs.getString(MainActivity.KEY_COMPANION_PALETTE, null)
     val palette = paletteRaw?.split("|")?.filter { it.isNotBlank() } ?: emptyList()
     return CompanionInfo(
@@ -2018,6 +2043,7 @@ fun LearningWordBadgeOverlay(
 fun TopicDiscoveryModal(
     topics: List<DiscoveryTopic>,
     isLoading: Boolean,
+    companionName: String,
     onDismiss: () -> Unit,
     onRefresh: () -> Unit,
     onTopicSelected: (DiscoveryTopic) -> Unit
@@ -2065,7 +2091,7 @@ fun TopicDiscoveryModal(
                                     color = Color(0xFF0284C7)
                                 )
                                 Text(
-                                    text = "Bé muốn cùng Doraemon khám phá gì nào?",
+                                    text = "Bé muốn cùng $companionName khám phá gì nào?",
                                     fontSize = 11.sp,
                                     color = Color(0xFF64748B)
                                 )
@@ -2098,7 +2124,7 @@ fun TopicDiscoveryModal(
                                 CircularProgressIndicator(color = Color(0xFF0284C7))
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Text(
-                                    text = "Doraemon đang mở túi thần kỳ... ✨",
+                                    text = "$companionName đang mở túi thần kỳ... ✨",
                                     fontSize = 12.sp,
                                     color = Color(0xFF0284C7),
                                     fontWeight = FontWeight.Medium

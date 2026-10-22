@@ -9,10 +9,25 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from emotion_engine import EmotionEngine
 from memory_manager import MemoryManager
 from personas import build_companion_prompt, resolve_persona
+from safety_guard import ChildSafetyGuard
 from session_lifecycle import wait_for_conversation
 
 
 class TestCompanionExperience(unittest.TestCase):
+    def test_legacy_profile_without_companion_choice_uses_neutral_name(self):
+        self.assertEqual(resolve_persona({"gender": "male"})["name"], "Bạn Robot")
+        self.assertEqual(resolve_persona({"companion_persona": "boy_blue"})["name"], "Dora")
+        self.assertEqual(
+            resolve_persona({"companion_persona": "boy_blue", "companion_name": "Bông"})["name"],
+            "Bông",
+        )
+
+    def test_safety_redirect_does_not_claim_a_different_companion_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ChildSafetyGuard(log_path=os.path.join(tmp, "safety.log"))
+            _, _, redirect = guard.evaluate_content("Con muốn nghịch lửa", "kid")
+            self.assertNotIn("Doraemon", redirect)
+
     def test_persona_has_stable_distinct_conversation_style(self):
         playful = build_companion_prompt(resolve_persona({"companion_persona": "boy_green"}))
         thoughtful = build_companion_prompt(resolve_persona({"companion_persona": "girl_purple"}))

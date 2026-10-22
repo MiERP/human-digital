@@ -77,6 +77,7 @@ fun SetupScreen(
     var parentPin by remember { mutableStateOf("1234") }
     var companionId by remember { mutableStateOf("boy_blue") }
     var companionName by remember { mutableStateOf("") }
+    var companionNameCustomized by remember { mutableStateOf(false) }
     var companionTouched by remember { mutableStateOf(false) }
 
     val selectedCompanion = COMPANION_CHOICES.firstOrNull { it.id == companionId }
@@ -196,13 +197,18 @@ fun SetupScreen(
                     onSelect = { companion ->
                         companionTouched = true
                         companionId = companion.id
-                        if (companionName.isBlank()) companionName = companion.name
+                        companionName = nameAfterCompanionChoice(
+                            companionName, companionNameCustomized, companion.name,
+                        )
                     }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = companionName,
-                    onValueChange = { companionName = it },
+                    onValueChange = {
+                        companionName = it
+                        companionNameCustomized = it.isNotBlank()
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("Tên nhân vật (bé tự đặt, vd: ${selectedCompanion.name})", color = Color(0xFF64748B)) },
                     singleLine = true,
@@ -313,6 +319,12 @@ fun SetupScreen(
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
+
+internal fun nameAfterCompanionChoice(
+    currentName: String,
+    isCustomized: Boolean,
+    presetName: String,
+): String = if (isCustomized) currentName else presetName
 
 /**
  * Dropdown tuổi 3-15. Dùng Box + DropdownMenu với nền tối và chữ sáng,

@@ -54,6 +54,40 @@ class ProfileApi(serverUrl: String) {
         }
     }
 
+    /** Fetch the child's chosen companion before a live voice session has connected. */
+    fun getSelectedCompanion(childId: String): CompanionInfo? {
+        return try {
+            val request = Request.Builder()
+                .url("$baseUrl/api/child/setup?child_id=$childId")
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                val setup = JSONObject(body)
+                if (!setup.optBoolean("setup_completed", false)) return null
+                val profile = setup.optJSONObject("profile") ?: return null
+                val chosenName = profile.optString("companion_name").profileValueOrNull()
+                val personaId = profile.optString("companion_persona").profileValueOrNull()
+                if (chosenName == null && personaId == null) {
+                    return CompanionInfo(name = "Bạn Robot")
+                }
+                val preset = fallbackCompanions().firstOrNull {
+                    it.id == personaId
+                } ?: fallbackCompanions().first()
+                resolveCompanion(
+                    preset,
+                    chosenName,
+                    profile.optString("companion_gender"),
+                    profile.optString("companion_voice"),
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "getSelectedCompanion failed: ${e.message}")
+            null
+        }
+    }
+
     fun submitSetup(
         childId: String,
         name: String,
@@ -283,9 +317,9 @@ class ProfileApi(serverUrl: String) {
                     favoriteAnimal = json.optString("favorite_animal", "Mèo máy"),
                     favoriteFood = json.optString("favorite_food", "Bánh rán"),
                     parentPin = json.optString("parent_pin", pin),
-                    companionPersona = json.optString("companion_persona", ""),
-                    companionName = json.optString("companion_name", ""),
-                    companionGender = json.optString("companion_gender", "")
+                    companionPersona = json.optString("companion_persona").profileValueOrNull().orEmpty(),
+                    companionName = json.optString("companion_name").profileValueOrNull().orEmpty(),
+                    companionGender = json.optString("companion_gender").profileValueOrNull().orEmpty()
                 )
             }
         } catch (e: Exception) {
@@ -570,6 +604,26 @@ class ProfileApi(serverUrl: String) {
         )
     }
 }
+
+internal fun resolveCompanion(
+    preset: CompanionInfo,
+    chosenName: String?,
+    chosenGender: String?,
+    chosenVoice: String?,
+): CompanionInfo = preset.copy(
+    name = chosenName.profileValueOrNull() ?: preset.name,
+    gender = chosenGender.profileValueOrNull() ?: preset.gender,
+    voice = chosenVoice.profileValueOrNull() ?: preset.voice,
+)
+
+/** The saved child choice is authoritative; the live server may still send a legacy default. */
+internal fun mergeCompanionName(
+    profileChoice: CompanionInfo,
+    serverReady: CompanionInfo,
+): CompanionInfo = serverReady.copy(name = profileChoice.name)
+
+private fun String?.profileValueOrNull(): String? = this?.trim()
+    ?.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
 
 data class DiscoveryTopic(
     val id: String,

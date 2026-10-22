@@ -278,7 +278,13 @@ fun ParentZoneDialog(
                                 editHobbies = editHobbies, onHobbiesChange = { editHobbies = it },
                                 editPersonality = editPersonality, onPersonalityChange = { editPersonality = it },
                                 editLevel = editLevel, onLevelChange = { editLevel = it },
-                                companionId = editCompanionId, onCompanionChange = { editCompanionId = it },
+                                companionId = editCompanionId, onCompanionChange = { nextId ->
+                                    if (editCompanionName.isBlank() ||
+                                        editCompanionName == companionDefaultName(editCompanionId)) {
+                                        editCompanionName = companionDefaultName(nextId)
+                                    }
+                                    editCompanionId = nextId
+                                },
                                 companionName = editCompanionName, onCompanionNameChange = { editCompanionName = it },
                                 onSave = {
                                     coroutineScope.launch(Dispatchers.IO) {
@@ -621,7 +627,7 @@ fun ProfileTab(
         }
         OutlinedTextField(
             value = companionName, onValueChange = onCompanionNameChange,
-            placeholder = { Text("Tên nhân vật (vd: Dora, Miu...)", color = Color(0xFF64748B)) },
+            placeholder = { Text("Tên nhân vật bé đặt", color = Color(0xFF64748B)) },
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 14.dp),
             colors = customTextFieldColors()
         )

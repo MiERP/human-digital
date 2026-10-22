@@ -1,42 +1,43 @@
 package com.example.digitalhuman.ui
 
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.digitalhuman.R
 import com.example.digitalhuman.network.CompanionInfo
 import com.example.digitalhuman.network.ConnectionState
 import com.example.digitalhuman.network.RobotEmotion
 
-/** The same Robo illustration responds to listening, thinking and live speech. */
+/** Robo is drawn in layers: stable shell, independently moving arms and screen face. */
 @Composable
 fun CompanionAvatar(
     state: ConnectionState,
@@ -45,109 +46,142 @@ fun CompanionAvatar(
     companion: CompanionInfo = CompanionInfo(),
     modifier: Modifier = Modifier,
 ) {
-    val motion = companionMotion(state, amplitude)
-    val tilt by animateFloatAsState(motion.tiltDegrees, tween(260), label = "robo_tilt")
-    val scale by animateFloatAsState(
-        motion.scale,
-        tween(if (state == ConnectionState.SPEAKING) 85 else 260),
-        label = "robo_scale",
+    val sprite = ImageBitmap.imageResource(R.drawable.robo_avatar)
+    val loop = rememberInfiniteTransition(label = "robo_face")
+    val blink by loop.animateFloat(
+        initialValue = 1f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(keyframes {
+            durationMillis = 3700
+            1f at 0
+            1f at 3300
+            0.08f at 3410
+            1f at 3540
+        }),
+        label = "blink",
     )
-    val talk by animateFloatAsState(motion.talkLevel, tween(75), label = "robo_talk")
-    val opacity by animateFloatAsState(motion.opacity, tween(350), label = "robo_opacity")
-    val infinite = rememberInfiniteTransition(label = "robo_idle")
-    val bob by infinite.animateFloat(
-        initialValue = -6f,
-        targetValue = 6f,
-        animationSpec = infiniteRepeatable(tween(2100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "robo_bob",
+    val gesture by loop.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
+        label = "hand_gesture",
     )
-    val halo by infinite.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(tween(1300, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "robo_halo",
-    )
-
-    val accent = parseHexColor(companion.palette.firstOrNull()) ?: Color(0xFF18DCE9)
-    val auraColor = when (state) {
-        ConnectionState.LISTENING -> Color(0xFF36D6B1)
-        ConnectionState.THINKING -> Color(0xFFFFC46B)
-        ConnectionState.SPEAKING -> accent
-        ConnectionState.SLEEPING -> Color.Transparent
-        else -> when (emotion.emotion) {
-            "excited", "proud" -> Color(0xFFFFC46B)
-            "sad" -> Color(0xFF8FA7BB)
-            else -> accent
-        }
-    }
+    val pose = companionMotion(state, amplitude, gesture)
+    val leftArm by animateFloatAsState(pose.leftArmDegrees, tween(90), label = "left_arm")
+    val rightArm by animateFloatAsState(pose.rightArmDegrees, tween(90), label = "right_arm")
+    val gazeX by animateFloatAsState(pose.gazeX, tween(220), label = "gaze_x")
+    val gazeY by animateFloatAsState(pose.gazeY, tween(220), label = "gaze_y")
+    val eyeOpen by animateFloatAsState(pose.eyeOpen, tween(120), label = "eye_open")
+    val mouth by animateFloatAsState(pose.talkLevel, tween(75), label = "mouth")
+    val opacity by animateFloatAsState(pose.opacity, tween(300), label = "robo_opacity")
 
     Box(modifier = modifier.size(280.dp), contentAlignment = Alignment.Center) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .offset(y = (-4).dp)
-                .size(width = 150.dp, height = 20.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.12f)),
-        )
-
-        if (state != ConnectionState.SLEEPING) {
-            Box(
-                modifier = Modifier
-                    .size(210.dp * halo)
-                    .blur(30.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(auraColor.copy(alpha = 0.42f + talk * 0.24f), Color.Transparent),
-                        ),
-                    ),
-            )
-        }
-
-        if (state == ConnectionState.SPEAKING) {
-            Box(
-                modifier = Modifier
-                    .size(252.dp)
-                    .drawBehind {
-                        drawCircle(
-                            color = auraColor.copy(alpha = 0.16f + talk * 0.34f),
-                            radius = size.minDimension * (0.40f + talk * 0.08f),
-                            center = Offset(size.width / 2, size.height / 2),
-                            style = Stroke(width = 2.dp.toPx()),
-                        )
-                    },
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .offset { IntOffset(0, (bob * if (state == ConnectionState.SLEEPING) 0.25f else 1f).toInt()) }
-                .graphicsLayer {
-                    rotationZ = tilt
-                    scaleX = scale
-                    scaleY = scale
-                    alpha = opacity
-                },
-            contentAlignment = Alignment.Center,
+        Canvas(
+            modifier = Modifier.fillMaxSize().semantics {
+                contentDescription = "${companion.name} đang ${stateLabel(state)}"
+            },
         ) {
-            Image(
-                painter = painterResource(R.drawable.robo_avatar),
-                contentDescription = "${companion.name} đang ${stateLabel(state)}",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (state == ConnectionState.SPEAKING && talk > 0.08f) {
-                Box(
-                    modifier = Modifier
-                        .offset(y = (-14).dp)
-                        .size(width = (16 + talk * 8).dp, height = (2 + talk * 7).dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Color(0xFF2FF6F9).copy(alpha = 0.6f + talk * 0.4f)),
+            val imageScale = size.height / sprite.height
+            val imageLeft = (size.width - sprite.width * imageScale) / 2f
+            fun point(x: Float, y: Float) = Offset(imageLeft + x * imageScale, y * imageScale)
+            fun region(x: Int, y: Int, width: Int, height: Int) {
+                drawImage(
+                    image = sprite,
+                    srcOffset = IntOffset(x, y),
+                    srcSize = IntSize(width, height),
+                    dstOffset = IntOffset(point(x.toFloat(), y.toFloat()).x.toInt(), point(x.toFloat(), y.toFloat()).y.toInt()),
+                    dstSize = IntSize((width * imageScale).toInt(), (height * imageScale).toInt()),
+                    alpha = opacity,
                 )
             }
+
+            // Draw the moving arms behind the fixed head and torso.
+            fun armOutline(vararg corners: Pair<Float, Float>) = Path().apply {
+                corners.forEachIndexed { index, (x, y) ->
+                    val corner = point(x, y)
+                    if (index == 0) moveTo(corner.x, corner.y) else lineTo(corner.x, corner.y)
+                }
+                close()
+            }
+            val leftArmOutline = armOutline(
+                0f to 765f, 305f to 765f, 305f to 955f,
+                240f to 1030f, 245f to 1370f, 0f to 1370f,
+            )
+            val rightArmOutline = armOutline(
+                800f to 765f, 1105f to 765f, 1105f to 1370f,
+                860f to 1370f, 865f to 1030f, 800f to 955f,
+            )
+            withTransform({ rotate(leftArm, point(310f, 805f)) }) {
+                clipPath(leftArmOutline) { region(0, 765, 340, 600) }
+            }
+            withTransform({ rotate(rightArm, point(795f, 805f)) }) {
+                clipPath(rightArmOutline) { region(765, 765, 340, 600) }
+            }
+            region(290, 755, 525, 530)
+            region(0, 0, sprite.width, 770)
+
+            drawRobotFace(::point, imageScale, eyeOpen * blink, gazeX, gazeY, mouth, state, emotion)
         }
+    }
+}
+
+private fun DrawScope.drawRobotFace(
+    point: (Float, Float) -> Offset,
+    scale: Float,
+    eyeOpen: Float,
+    gazeX: Float,
+    gazeY: Float,
+    mouth: Float,
+    state: ConnectionState,
+    emotion: RobotEmotion,
+) {
+    val cyan = when (emotion.emotion) {
+        "excited", "surprised", "proud" -> Color(0xFFFFD76A)
+        "sad" -> Color(0xFF91C9E8)
+        "strict", "displeased" -> Color(0xFFFFA96B)
+        else -> Color(0xFF20F3F5)
+    }
+    // Repaint only the dark display interior so the printed eyes do not remain visible.
+    drawRoundRect(
+        brush = Brush.verticalGradient(listOf(Color(0xFF34393D), Color(0xFF171B1E))),
+        topLeft = point(355f, 415f),
+        size = Size(395f * scale, 246f * scale),
+        cornerRadius = CornerRadius(38f * scale),
+    )
+    for (eyeX in listOf(445f, 662f)) {
+        val center = point(eyeX + gazeX, 516f + gazeY)
+        if (eyeOpen < 0.16f) {
+            drawLine(cyan, center.copy(x = center.x - 29f * scale), center.copy(x = center.x + 29f * scale), 6f * scale)
+        } else {
+            drawOval(
+                cyan.copy(alpha = 0.20f),
+                topLeft = Offset(center.x - 44f * scale, center.y - 44f * eyeOpen * scale),
+                size = Size(88f * scale, 88f * eyeOpen * scale),
+            )
+            drawOval(
+                cyan,
+                topLeft = Offset(center.x - 31f * scale, center.y - 31f * eyeOpen * scale),
+                size = Size(62f * scale, 62f * eyeOpen * scale),
+            )
+        }
+    }
+    if (state == ConnectionState.SPEAKING && mouth > 0.04f) {
+        drawRoundRect(
+            color = cyan,
+            topLeft = point(529f, 604f - mouth * 12f),
+            size = Size(52f * scale, (5f + mouth * 29f) * scale),
+            cornerRadius = CornerRadius(17f * scale),
+        )
+    } else if (state != ConnectionState.SLEEPING) {
+        drawArc(
+            color = cyan.copy(alpha = 0.8f),
+            startAngle = 20f,
+            sweepAngle = 140f,
+            useCenter = false,
+            topLeft = point(522f, 586f),
+            size = Size(66f * scale, 37f * scale),
+            style = Stroke(width = 4f * scale),
+        )
     }
 }
 
@@ -157,18 +191,4 @@ private fun stateLabel(state: ConnectionState): String = when (state) {
     ConnectionState.SPEAKING -> "nói chuyện"
     ConnectionState.SLEEPING -> "ngủ"
     else -> "ở đây"
-}
-
-private fun parseHexColor(hex: String?): Color? {
-    if (hex.isNullOrBlank()) return null
-    return try {
-        val clean = hex.trim().removePrefix("#")
-        when (clean.length) {
-            6 -> Color(0xFF000000L or clean.toLong(16))
-            8 -> Color(clean.toLong(16))
-            else -> null
-        }
-    } catch (_: NumberFormatException) {
-        null
-    }
 }

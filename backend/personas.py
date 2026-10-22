@@ -95,7 +95,8 @@ def resolve_persona(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     persona_id = profile.get("companion_persona") or default_persona_id_for_gender(child_gender)
     preset = get_preset(persona_id)
 
-    name = (profile.get("companion_name") or "").strip() or preset["default_name"]
+    chosen_name = (profile.get("companion_name") or "").strip()
+    name = chosen_name or (preset["default_name"] if profile.get("companion_persona") else "Bạn Robot")
     gender = normalize_gender(profile.get("companion_gender")) or preset["gender"]
     voice = (profile.get("companion_voice") or "").strip() or preset["voice"]
 
