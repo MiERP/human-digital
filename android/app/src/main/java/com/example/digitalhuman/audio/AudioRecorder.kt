@@ -8,6 +8,7 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.util.Log
 import com.konovalov.vad.silero.Vad
 import com.konovalov.vad.silero.VadSilero
 import com.konovalov.vad.silero.config.FrameSize
@@ -129,7 +130,7 @@ class AudioRecorder(
                 .setContext(context)
                 .setSampleRate(SampleRate.SAMPLE_RATE_16K)
                 .setFrameSize(FrameSize.FRAME_SIZE_512)
-                .setMode(Mode.NORMAL)
+                .setMode(Mode.AGGRESSIVE)
                 .setSpeechDurationMs(100)
                 .setSilenceDurationMs(300)
                 .build()
@@ -208,6 +209,10 @@ class AudioRecorder(
                         val loudEnough = !playing || cleanRms > echoThreshold
 
                         if (speechOnsetFrames >= requiredOnset && loudEnough) {
+                            Log.i(
+                                "AudioRecorder",
+                                "Speech onset: playback=$playing frames=$speechOnsetFrames rms=${"%.3f".format(cleanRms)} echoThreshold=${"%.3f".format(echoThreshold)}",
+                            )
                             userSpeaking = true
                             silenceFrames = 0
 

@@ -1400,50 +1400,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     except Exception as e:
                                         logger.warning(f"Failed to forward video frame: {e}")
                             elif action == "child_emotion":
-                                # Nhận nhãn cảm xúc khuôn mặt từ Edge AI (Google ML Kit Face Detection trên điện thoại bé)
-                                child_facial_emotion = payload.get("emotion", "")
-                                confidence = payload.get("confidence", 0.0)
-                                now_ts = time.time()
-                                last_injected_ts = getattr(receive_from_client, '_last_emotion_injected_at', 0.0)
-                                last_emotion_val = getattr(receive_from_client, '_last_emotion', None)
-                                last_hint_text = getattr(receive_from_client, '_last_emotion_hint', "")
-
-                                # Chỉ những thay đổi thật sự đáng chú ý mới đáng chen vào
-                                # mạch trò chuyện. "attentive/focused" là trạng thái mặc
-                                # định — nhắc lại sẽ khiến model nói như một cỗ máy.
-                                emotion_context_map = {
-                                    "super_happy": "Bé đang cười rất tươi và vô cùng thích thú. Hãy vui cùng bé, đừng giảng giải.",
-                                    "happy": "Bé đang mỉm cười vui vẻ.",
-                                    "curious": "Bé đang tò mò, chờ bạn nói tiếp. Hãy giữ nhịp chậm và cụ thể.",
-                                    "distracted": "Bé hơi lơ đãng. Hãy gọi tên bé thật nhẹ hoặc mời bé kể về thứ bé đang nhìn. Không đố, không nhắc học.",
-                                    "sleepy": "Bé có vẻ mệt. Hãy hỏi nhẹ xem bé có muốn nghỉ không.",
-                                }
-                                hint = emotion_context_map.get(child_facial_emotion)
-                                is_state_changed = (child_facial_emotion != last_emotion_val)
-                                min_cooldown = 10.0 if is_state_changed else 90.0
-                                is_same_hint = (hint == last_hint_text)
-                                should_inject = (
-                                    bool(hint)
-                                    and confidence >= 0.40
-                                    and not is_same_hint
-                                    and (is_state_changed or (now_ts - last_injected_ts) >= min_cooldown)
-                                )
-
-                                receive_from_client._last_emotion = child_facial_emotion
-                                if should_inject:
-                                    receive_from_client._last_emotion_injected_at = now_ts
-                                    receive_from_client._last_emotion_hint = hint
-                                    try:
-                                        await session.send_realtime_input(
-                                            text=(
-                                                "\n[Quan sát cảm xúc bé qua camera: "
-                                                f"{hint} Không nhắc tới camera, chỉ để điều đó "
-                                                "tự nhiên thay đổi cách bạn phản hồi.]\n"
-                                            )
-                                        )
-                                        logger.info(f"Injected facial emotion context into Gemini: {child_facial_emotion}")
-                                    except Exception as e:
-                                        logger.debug(f"Failed to inject emotion context into realtime stream: {e}")
+                                # Nhãn camera chỉ dùng cho UI tại thiết bị. Đẩy text
+                                # vào Live stream sẽ tạo lượt nói mới dù bé im lặng.
+                                pass
                             elif action == "clarification_response":
                                 # Android gửi lại lựa chọn mà bé đã tap trên chip bar.
                                 # Dùng send_client_content(turn_complete=True) để tạo MỘT

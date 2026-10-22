@@ -723,23 +723,26 @@ fun TutorScreen(
     val audioPlayer = remember {
         AudioPlayer(
             onOutputAmplitude = { amp ->
+                // Đồng bộ với thread ghi âm ngay, trước khi main thread vẽ UI.
+                audioRecorderRef?.updatePlaybackAmplitude(amp)
                 runOnMain {
                     robotAmplitude = amp
-                    // Báo biên độ loa cho recorder để tính ngưỡng barge-in thích ứng.
-                    audioRecorderRef?.updatePlaybackAmplitude(amp)
                 }
             },
             onPlaybackStateChanged = { isPlaying ->
+                if (isPlaying) {
+                    audioRecorderRef?.isPlaybackActive = true
+                } else {
+                    audioRecorderRef?.onPlaybackFinished()
+                }
                 runOnMain {
                     if (isPlaying) {
-                        audioRecorderRef?.isPlaybackActive = true
                         if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                             connectionState = ConnectionState.SPEAKING
                             // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
                             audioRecorderRef?.isMicListeningEnabled = true
                         }
                     } else {
-                        audioRecorderRef?.onPlaybackFinished()
                         if (sessionEndPending) {
                             finishSessionAfterPlayback()
                         } else if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
@@ -788,11 +791,13 @@ fun TutorScreen(
                 // Đẩy audio vào hàng đợi ngay trên thread mạng; chỉ cập nhật UI trên main.
                 // Trước đây mọi chunk đều đi qua main thread nên UI bận là audio bị dồn.
                 audioPlayer.enqueueAudio(audioBytes)
+                if (audioPlayer.isPlayingOrPending) {
+                    audioRecorderRef?.onPlaybackChunkReceived()
+                }
                 runOnMain {
                     connectionState = ConnectionState.SPEAKING
                     // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
                     audioRecorderRef?.isMicListeningEnabled = true
-                    audioRecorderRef?.onPlaybackChunkReceived()
                 }
             },
             onStateChanged = { newState ->
@@ -933,9 +938,8 @@ fun TutorScreen(
 
     // Quản lý "Đôi Mắt Cảm Xúc" (Edge AI ML Kit Face Detection chạy ngầm Camera trước)
     val faceEmotionManager = remember(client) {
-        FaceEmotionManager(context = context) { emotion, confidence ->
+        FaceEmotionManager(context = context) { emotion, _ ->
             childDetectedEmotion = emotion
-            client.sendChildEmotion(emotion, confidence)
         }
     }
 

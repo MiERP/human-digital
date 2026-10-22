@@ -23,7 +23,8 @@ Luna phải nghe được câu đáp ngắn sau lời khơi chuyện và chờ x
 2. Trong khi chờ Gemini xử lý lời bé, bộ hẹn giờ không phát lời khơi chuyện khác. Sau khi Luna hoàn tất phản hồi, nhịp chủ động mới có thể tiếp tục.
 3. App không hiển thị “đang nghĩ” chỉ vì bộ VAD cục bộ vừa kết thúc; phải có tín hiệu nội dung đầu vào đã được Gemini nhận dạng.
 4. Năng lượng `tired` không làm Luna nhắm mắt khi nghe/nói; trạng thái ngủ thực sự vẫn có mắt nhắm.
-5. Unit test Android/backend, build APK và kiểm tra trạng thái mắt/log trên điện thoại đều đạt. Kết quả nghe hiểu câu ngắn cần người dùng nói thật để xác nhận.
+5. Nhãn cảm xúc từ camera không tự tạo lượt Gemini khi bé im lặng; camera vẫn có thể cập nhật trạng thái tại thiết bị.
+6. Unit test Android/backend, build APK và kiểm tra trạng thái mắt/log trên điện thoại đều đạt. Kết quả nghe hiểu câu ngắn cần người dùng nói thật để xác nhận.
 
 ## Boundaries
 
