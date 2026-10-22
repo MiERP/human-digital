@@ -815,6 +815,7 @@ fun TutorScreen(
                             audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                         }
                         ConnectionState.SLEEPING -> {
+                            audioRecorderRef?.onAssistantTurnFinished()
                             audioRecorderRef?.isMicListeningEnabled = false
                             if (!audioPlayer.isPlayingOrPending) {
                                 connectionState = ConnectionState.SLEEPING
@@ -822,6 +823,7 @@ fun TutorScreen(
                         }
                         ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
                             connectionState = newState
+                            audioRecorderRef?.onAssistantTurnFinished()
                             audioRecorderRef?.isMicListeningEnabled = false
                             if (isSessionActive) openingGreetingGate.startSession()
                         }
@@ -844,6 +846,7 @@ fun TutorScreen(
             },
             onInterrupted = {
                 runOnMain {
+                    audioRecorderRef?.onAssistantTurnFinished()
                     if (interruptionGate.shouldFlushOnServerInterruption()) {
                         audioPlayer.beginInterruption()
                         connectionState = ConnectionState.LISTENING
@@ -874,6 +877,7 @@ fun TutorScreen(
             },
             onTurnComplete = {
                 runOnMain {
+                    audioRecorderRef?.onAssistantTurnFinished()
                     if (!audioPlayer.isPlayingOrPending) {
                         openingGreetingGate.onTurnCompleteWithoutAudio()
                         if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
@@ -1052,6 +1056,7 @@ fun TutorScreen(
     fun startSession() {
         sessionEndPending = false
         isSessionActive = true
+        audioRecorder.onAssistantTurnFinished()
         clarificationRequest = null
         activeLearningCue = null
         interruptionGate.reset()

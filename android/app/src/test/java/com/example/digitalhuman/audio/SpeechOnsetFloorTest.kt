@@ -14,6 +14,10 @@ class SpeechOnsetFloorTest {
         assertTrue(0.02f > speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.004f))
     }
 
+    @Test fun veryQuietRoomNoiseDoesNotOpenATurn() {
+        assertFalse(0.012f > speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.004f))
+    }
+
     @Test fun bargeInKeepsTheEchoThreshold() {
         assertEquals(0.06f, speechOnsetFloor(playing = true, echoThreshold = 0.06f, noiseFloor = 0.09f), 0.0001f)
     }

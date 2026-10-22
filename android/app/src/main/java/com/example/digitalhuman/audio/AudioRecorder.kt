@@ -56,6 +56,10 @@ class AudioRecorder(
         // Sau khi chốt cưỡng bức, tạm bỏ qua speech để không tái latch ngay.
         private const val FORCE_END_QUIET_MS = 1000L
 
+        // Nếu Gemini không trả lời trong khoảng này, mở lại quyền nghe bình thường
+        // để một lỗi phía server không khóa mic vĩnh viễn.
+        private const val ASSISTANT_BUSY_TIMEOUT_MS = 12_000L
+
         // Ngưỡng RMS tối thiểu để coi là barge-in thật khi loa đang phát.
         // Nâng lên 0.10 vì tiếng loa Luna lọt vào mic (dù có AEC) từng làm
         // cô ấy tự ngắt lời mình nhiều lần trong một lượt.
@@ -83,6 +87,19 @@ class AudioRecorder(
 
     @Volatile
     var isMicListeningEnabled = true
+
+    // Gemini đang xử lý lượt của bé (từ lúc bé dứt lời đến turn_complete).
+    // Trong khoảng này tiếng ồn nền không được mở lượt mới, nếu không Gemini
+    // sẽ tự ngắt câu trả lời của mình trước cả khi phát audio.
+    @Volatile
+    var isAssistantTurnActive = false
+
+    @Volatile
+    private var assistantTurnStartedAt = 0L
+
+    fun onAssistantTurnFinished() {
+        isAssistantTurnActive = false
+    }
 
     // Chẩn đoán chỉ bật ở bản debug, không làm nhiễu log bản phát hành.
     private val isDebuggable: Boolean =
@@ -204,7 +221,10 @@ class AudioRecorder(
                 // Micro chỉ bị tắt HẲN khi đang ngủ / mất kết nối. Trong lúc Doraemon
                 // nói, mic vẫn nghe để bé có thể ngắt lời (full-duplex barge-in).
                 val micDisabled = !isMicListeningEnabled
-                val playing = isPlaybackActive || now < playbackGraceUntil
+                if (isAssistantTurnActive && now - assistantTurnStartedAt > ASSISTANT_BUSY_TIMEOUT_MS) {
+                    isAssistantTurnActive = false
+                }
+                val playing = isPlaybackActive || now < playbackGraceUntil || isAssistantTurnActive
                 val echoThreshold = (lastPlaybackAmplitude * 0.5f).coerceAtLeast(MIN_BARGE_RMS)
 
                 // Dùng đúng instance VAD của phiên này. Nếu stopRecording() đã
@@ -288,6 +308,8 @@ class AudioRecorder(
                             silenceFrames = 0
                             loudOnsetFrames = 0
                             utteranceFrames = 0
+                            // Bé đã giành lượt: mở lại VAD bình thường.
+                            isAssistantTurnActive = false
 
                             // 1. Báo bắt đầu lượt (UI: nếu đang phát thì flush loa ngay).
                             onSpeechStarted()
@@ -314,6 +336,8 @@ class AudioRecorder(
                             utteranceFrames = 0
                             preRoll.clear()
                             muteOnsetUntil = now + FORCE_END_QUIET_MS
+                            isAssistantTurnActive = true
+                            assistantTurnStartedAt = now
                             onSpeechEnded()
                         }
                     }
@@ -330,6 +354,8 @@ class AudioRecorder(
                         speechOnsetFrames = 0
                         loudOnsetFrames = 0
                         utteranceFrames = 0
+                        isAssistantTurnActive = true
+                        assistantTurnStartedAt = now
                         onSpeechEnded()
                     }
                 } else {
@@ -390,6 +416,7 @@ class AudioRecorder(
 
     fun stopRecording() {
         isRecording = false
+        isAssistantTurnActive = false
         recordingJob?.cancel()
         recordingJob = null
 
@@ -434,7 +461,7 @@ internal fun shouldForceEndUtterance(utteranceFrames: Int): Boolean =
 
 // Sàn năng lượng cho onset: chặn VAD "latch" speech từ frame gần như im lặng
 // (đã quan sát onset RMS=0.000 làm app kẹt lượt vĩnh viễn).
-private const val ONSET_MIN_RMS = 0.008f
+private const val ONSET_MIN_RMS = 0.015f
 
 /**
  * Ngưỡng RMS tối thiểu để bắt đầu một lượt nói.
