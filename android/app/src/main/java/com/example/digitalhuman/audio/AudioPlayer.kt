@@ -44,6 +44,13 @@ class AudioPlayer(
 
         // Khuếch đại âm lượng phát lại: 1.8x để giọng Doraemon to rõ nhưng không bị méo tiếng.
         private const val VOLUME_GAIN = 1.8f
+
+        // Nếu mạng dồn quá nhiều audio, hàng đợi phát lại sẽ nghe như lặp nội dung cũ.
+        private const val MAX_PENDING_BYTES = BYTES_PER_SECOND * 8
+
+        // Sau khi bé ngắt lời, bỏ các chunk của lượt cũ còn đang bay tới.
+        // Không có cửa sổ này, loa sẽ phát tiếp nửa câu vừa bị ngắt.
+        private const val INTERRUPT_SUPPRESS_MS = 400L
     }
 
     private var audioTrack: AudioTrack? = null
@@ -67,6 +74,9 @@ class AudioPlayer(
 
     @Volatile
     private var isServerTurnComplete = false
+
+    @Volatile
+    private var suppressIncomingUntilMs = 0L
 
     private val pendingBytes = AtomicInteger(0)
 
@@ -170,10 +180,25 @@ class AudioPlayer(
     }
 
     fun enqueueAudio(data: ByteArray) {
-        val wasIdle = audioQueue.isEmpty() && pendingBytes.get() == 0 && !isCurrentlyPlayingAudio
-        isServerTurnComplete = false
-        audioQueue.add(data)
-        pendingBytes.addAndGet(data.size)
+        var wasIdle: Boolean
+        // Cùng một lock với stopAndFlush(): một chunk đang tới đúng lúc bé ngắt
+        // lời không thể lọt vào hàng đợi sau khi đã flush.
+        synchronized(this) {
+            if (System.currentTimeMillis() < suppressIncomingUntilMs) {
+                Log.d(TAG, "Dropping stale audio chunk after interruption (${data.size} bytes)")
+                return
+            }
+            if (pendingBytes.get() + data.size > MAX_PENDING_BYTES) {
+                Log.w(TAG, "Audio backlog too large; flushing stale queue")
+                audioQueue.clear()
+                pendingBytes.set(0)
+            }
+
+            wasIdle = audioQueue.isEmpty() && pendingBytes.get() == 0 && !isCurrentlyPlayingAudio
+            isServerTurnComplete = false
+            audioQueue.add(data)
+            pendingBytes.addAndGet(data.size)
+        }
 
         if (wasIdle) {
             isPreBuffering = true
@@ -191,6 +216,16 @@ class AudioPlayer(
         if (audioQueue.isEmpty() && pendingBytes.get() == 0 && !isCurrentlyPlayingAudio) {
             onPlaybackStateChanged(false)
         }
+    }
+
+    /**
+     * Bé ngắt lời: dừng phát ngay và bỏ luôn các chunk của lượt cũ còn đang
+     * bay tới. Không có bước này, loa sẽ phát tiếp phần còn lại của câu vừa bị
+     * ngắt rồi mới trả lời lượt mới — nghe như robot nói lặp.
+     */
+    fun beginInterruption() {
+        suppressIncomingUntilMs = System.currentTimeMillis() + INTERRUPT_SUPPRESS_MS
+        stopAndFlush()
     }
 
     /**

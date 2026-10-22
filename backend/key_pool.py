@@ -2,9 +2,14 @@ import os
 import time
 import logging
 import threading
+import hashlib
 from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger("digital-human-backend")
+
+def key_id(key: str) -> str:
+    """Opaque identifier used to keep a resumed session on its original API key."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 class KeyInfo:
     """Đại diện cho trạng thái của 1 Google Gemini API Key trong Pool."""
@@ -85,7 +90,8 @@ class KeyPoolManager:
         with self._lock:
             return len(self._pool)
 
-    def acquire_key(self, client_api_key: Optional[str] = None) -> Optional[str]:
+    def acquire_key(self, client_api_key: Optional[str] = None,
+                    preferred_key_id: Optional[str] = None) -> Optional[str]:
         """
         Lấy API key tối ưu cho một phiên kết nối mới:
         - Nếu client cung cấp key riêng hợp lệ -> Sử dụng key riêng đó (BYOK).
@@ -104,6 +110,15 @@ class KeyPoolManager:
                 return None
 
             now = time.time()
+            if preferred_key_id:
+                preferred = next((k for k in self._pool
+                                  if key_id(k.key) == preferred_key_id
+                                  and now >= k.cooldown_until), None)
+                if preferred is not None:
+                    preferred.active_connections += 1
+                    preferred.total_sessions += 1
+                    preferred.last_used_at = now
+                    return preferred.key
             # Lọc các key sẵn sàng (không trong cooldown)
             available_keys = [k for k in self._pool if now >= k.cooldown_until]
 

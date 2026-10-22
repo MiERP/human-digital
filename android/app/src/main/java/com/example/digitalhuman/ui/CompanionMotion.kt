@@ -1,6 +1,56 @@
 package com.example.digitalhuman.ui
 
 import com.example.digitalhuman.network.ConnectionState
+import com.example.digitalhuman.network.RobotEmotion
+
+internal enum class AvatarExpression { NEUTRAL, HAPPY, SAD, STRICT, THINKING, SLEEPY }
+
+internal data class AvatarVisualState(
+    val expression: AvatarExpression,
+    val lightEnergy: Float,
+    val mouthOpen: Float,
+    val leftArmDegrees: Float,
+    val rightArmDegrees: Float,
+)
+
+/** The live voice and emotion signals become bounded, predictable visual targets. */
+internal fun companionVisualState(
+    state: ConnectionState,
+    emotion: RobotEmotion,
+    amplitude: Float,
+    gesturePhase: Float,
+): AvatarVisualState {
+    val level = if (amplitude.isFinite()) amplitude.coerceIn(0f, 1f) else 0f
+    val phase = if (gesturePhase.isFinite()) gesturePhase.coerceIn(0f, 1f) else 0f
+    val expression = when {
+        state == ConnectionState.SLEEPING -> AvatarExpression.SLEEPY
+        emotion.energy == "sleepy" || emotion.energy == "drowsy" || emotion.energy == "tired" -> AvatarExpression.SLEEPY
+        emotion.emotion == "happy" || emotion.emotion == "excited" || emotion.emotion == "proud" || emotion.emotion == "surprised" -> AvatarExpression.HAPPY
+        emotion.emotion == "sad" -> AvatarExpression.SAD
+        emotion.emotion == "strict" || emotion.emotion == "displeased" || emotion.emotion == "angry" -> AvatarExpression.STRICT
+        state == ConnectionState.THINKING -> AvatarExpression.THINKING
+        else -> AvatarExpression.NEUTRAL
+    }
+    if (state == ConnectionState.SLEEPING) {
+        return AvatarVisualState(expression, 0.12f, 0f, 0f, 0f)
+    }
+    val speaking = state == ConnectionState.SPEAKING
+    val emotionBoost = when (expression) {
+        AvatarExpression.HAPPY -> 0.15f
+        AvatarExpression.SAD, AvatarExpression.SLEEPY -> -0.18f
+        AvatarExpression.STRICT -> 0.05f
+        else -> 0f
+    }
+    val light = (0.43f + emotionBoost + if (speaking) 0.15f + level * 0.27f else 0f).coerceIn(0.12f, 0.95f)
+    val gesture = if (speaking) 5f + level * 7f else 0f
+    return AvatarVisualState(
+        expression = expression,
+        lightEnergy = light,
+        mouthOpen = if (speaking) (0.12f + level * 0.88f) else 0f,
+        leftArmDegrees = gesture * (0.3f + phase * 0.7f),
+        rightArmDegrees = -gesture * (1f - phase * 0.7f),
+    )
+}
 
 internal data class CompanionMotion(
     val leftArmDegrees: Float,
@@ -38,4 +88,14 @@ internal fun companionMotion(state: ConnectionState, amplitude: Float, gesturePh
         }
         else -> CompanionMotion(0f, 0f, 0f, 0f, 1f, 0f, 1f)
     }
+}
+
+/** Vertical offset in dp for a calm idle hover, with a slightly stronger response while speaking. */
+internal fun companionBobOffset(state: ConnectionState, amplitude: Float, phase: Float): Float {
+    if (state == ConnectionState.SLEEPING) return 0f
+
+    val level = if (amplitude.isFinite()) amplitude.coerceIn(0f, 1f) else 0f
+    val progress = if (phase.isFinite()) phase.coerceIn(0f, 1f) else 0f
+    val distance = if (state == ConnectionState.SPEAKING) 7f + level * 3f else 7f
+    return (progress * 2f - 1f) * distance
 }

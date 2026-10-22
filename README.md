@@ -1,27 +1,14 @@
-# 🤖 Digital Human AI Tutor for Kids (Android + Gemini Live)
+# 🤖 Digital Human — bạn robot trò chuyện cùng trẻ (Android + Gemini Live)
 
-Dự án trợ lý ảo Digital Human 2D Doraemon cho trẻ em từ 5–12 tuổi. Tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp (không cần LiveKit hay dịch vụ trung gian đắt tiền).
+Dự án bạn đồng hành AI cho trẻ em từ 5–12 tuổi. Trò chuyện, lắng nghe và cùng khám phá là trải nghiệm chính; học tiếng Anh, kiến thức và kế hoạch học là tính năng phụ khi bé hoặc phụ huynh chủ động chọn. Ứng dụng tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp.
 
-## 🎯 Hai chế độ hoạt động
+## 🎯 Trò chuyện trước, khám phá theo nhu cầu
 
-### 1️⃣ Chế độ Bách khoa toàn thư (Encyclopedia Mode) — Knowledge
-Doraemon đóng vai một cuốn bách khoa toàn thư sinh động, trả lời các câu hỏi về **lịch sử, địa lý, khoa học tự nhiên, vũ trụ, thiên văn, động vật, nhân vật nổi tiếng…**
+Robot đi theo câu chuyện và cảm xúc của bé, không tự biến mỗi lượt nói thành bài học hay câu đố. Khi bé hỏi một câu kiến thức, robot có thể tra cứu và trả lời ngắn gọn; khi bé muốn luyện tiếng Anh, robot hỗ trợ tự nhiên trong cuộc trò chuyện.
 
-Cơ chế hoạt động:
-- Khi bé hỏi "Hai Bà Trưng là ai?" nhưng **câu hỏi mơ hồ**, Doraemon sẽ tự động hỏi lại với 2–4 lựa chọn chủ đề hiển thị dưới dạng **chip bar** trên màn hình Android. Bé chỉ cần chạm vào chip phù hợp.
-- Khi chủ đề đã rõ (do bé nói rõ, hoặc sau khi hỏi lại), Doraemon gọi tool `search` để tìm **top 3 kết quả** đáng tin cậy nhất (Google Programmable Search Engine primary, fallback Wikipedia Simple English khi CSE không khả dụng).
-- Gemini tổng hợp 3 kết quả thành một đoạn văn ngắn gọn **3–5 câu**, ngôn ngữ thân thiện với trẻ em, xen lẫn 1–2 từ tiếng Anh về chủ đề.
-- Mọi URL đều qua bộ lọc an toàn trẻ em `ChildSafetyGuard.assert_safe_url()` — chỉ whitelist mới được phép.
-- **Cache in-memory 1 giờ** giúp tiết kiệm quota Google CSE và giảm độ trễ trả lời cho câu hỏi lặp lại.
+Các khả năng phụ vẫn có: tra cứu kiến thức qua `search` với bộ lọc an toàn `ChildSafetyGuard`, hỗ trợ tiếng Anh, trí nhớ sở thích/kỷ niệm chung, theo dõi tiến độ học và kế hoạch học trong Góc Phụ Huynh. Câu hỏi chỉ cần làm rõ khi thực sự có nhiều cách hiểu khác nhau.
 
-### 2️⃣ Chế độ Học tiếng Anh (English Mode) — Conversation
-Giữ nguyên toàn bộ tính năng English Buddy nguyên bản:
-- Trò chuyện song ngữ Việt ↔ Anh
-- Học từ vựng, ngữ pháp qua sửa lỗi tự nhiên (Recasting)
-- Lưu hồ sơ bé (tên, sở thích, gia đình, thú cưng…)
-- Theo dõi tiến độ học tập (`learning_progress`)
-
-**Doraemon tự động nhận diện chế độ** dựa trên nội dung câu hỏi — KHÔNG cần nhấn nút chuyển. Câu hỏi kiến thức → Encyclopedia. Trò chuyện / học tiếng Anh → English mode. Hai chế độ chuyển qua lại linh hoạt trong cùng 1 phiên.
+Màn hình trò chuyện chỉ giữ các điều khiển chính. Bé có thể hỏi bất kỳ chủ đề khám phá nào bằng giọng nói, không cần nút hay chế độ riêng.
 
 ---
 

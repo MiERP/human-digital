@@ -620,6 +620,11 @@ fun TutorScreen(
     var isSessionActive by remember { mutableStateOf(false) }
     var sessionEndPending by remember { mutableStateOf(false) }
 
+    // Bảo vệ khởi tạo audio bất đồng bộ: nếu bé dừng phiên ngay lập tức,
+    // coroutine đang khởi tạo sẽ không bật lại micro.
+    val audioSessionLifecycle = remember { com.example.digitalhuman.audio.AudioSessionLifecycle() }
+    val interruptionGate = remember { com.example.digitalhuman.audio.InterruptionGate() }
+
     // Đồng hồ ngủ: sau session_ended, đếm 120s chờ wake word rồi thoát app.
     var sleepJob by remember { mutableStateOf<Job?>(null) }
 
@@ -654,11 +659,6 @@ fun TutorScreen(
     // Xác nhận reset cấu hình (chống bé bấm nhầm khi đang chơi)
     var showResetConfirm by remember { mutableStateOf(false) }
     var resetPin by remember { mutableStateOf("") }
-
-    // Chiếc Túi Thần Kỳ - Menu Thẻ Chủ Đề Khám Phá ⭐
-    var showTopicSheet by remember { mutableStateOf(false) }
-    var discoveryTopics by remember { mutableStateOf<List<DiscoveryTopic>>(emptyList()) }
-    var isLoadingTopics by remember { mutableStateOf(false) }
 
     var audioRecorderRef by remember { mutableStateOf<AudioRecorder?>(null) }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
@@ -716,18 +716,6 @@ fun TutorScreen(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Speakerphone routing error: ${e.message}")
-        }
-    }
-
-    fun loadDiscoveryTopics() {
-        isLoadingTopics = true
-        scope.launch(Dispatchers.IO) {
-            val api = ProfileApi(serverUrl)
-            val list = api.getDiscoveryTopics(childId)
-            runOnMain {
-                discoveryTopics = list
-                isLoadingTopics = false
-            }
         }
     }
 
@@ -797,12 +785,14 @@ fun TutorScreen(
             deviceModel = deviceModel,
             androidVersion = androidVersion,
             onAudioReceived = { audioBytes ->
+                // Đẩy audio vào hàng đợi ngay trên thread mạng; chỉ cập nhật UI trên main.
+                // Trước đây mọi chunk đều đi qua main thread nên UI bận là audio bị dồn.
+                audioPlayer.enqueueAudio(audioBytes)
                 runOnMain {
                     connectionState = ConnectionState.SPEAKING
                     // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
                     audioRecorderRef?.isMicListeningEnabled = true
                     audioRecorderRef?.onPlaybackChunkReceived()
-                    audioPlayer.enqueueAudio(audioBytes)
                 }
             },
             onStateChanged = { newState ->
@@ -841,8 +831,10 @@ fun TutorScreen(
             },
             onInterrupted = {
                 runOnMain {
-                    audioPlayer.stopAndFlush()
-                    connectionState = ConnectionState.LISTENING
+                    if (interruptionGate.shouldFlushOnServerInterruption()) {
+                        audioPlayer.beginInterruption()
+                        connectionState = ConnectionState.LISTENING
+                    }
                     audioRecorderRef?.isMicListeningEnabled = true
                 }
             },
@@ -1004,8 +996,10 @@ fun TutorScreen(
                 // activity_start. Ở đây chỉ cần xử lý barge-in cục bộ cho mượt.
                 runOnMain {
                     if (connectionState == ConnectionState.SPEAKING || audioPlayer.isPlayingOrPending) {
-                        // Barge-in: bé nói xen vào khi Doraemon đang phát -> dừng phát tức thì.
-                        audioPlayer.stopAndFlush()
+                        // Barge-in: bé nói xen vào khi Doraemon đang phát -> dừng phát tức thì
+                        // và bỏ luôn các chunk của lượt cũ còn đang bay tới.
+                        interruptionGate.onLocalInterruption()
+                        audioPlayer.beginInterruption()
                     }
                     if (connectionState != ConnectionState.SLEEPING) {
                         connectionState = ConnectionState.LISTENING
@@ -1030,18 +1024,41 @@ fun TutorScreen(
     fun startSession() {
         sessionEndPending = false
         isSessionActive = true
+        interruptionGate.reset()
         setSpeakerphoneRouting(true)
-        audioPlayer.start(scope)
+        val generation = audioSessionLifecycle.begin()
+        audioRecorder.isMicListeningEnabled = true
+        // AudioTrack + model VAD Silero được khởi tạo trên IO: trước đây chúng
+        // chạy trên main thread nên lần bấm đầu tiên bị khựng UI.
+        scope.launch(Dispatchers.IO) {
+            audioSessionLifecycle.start(
+                generation,
+                onStart = {
+                    audioPlayer.start(scope)
+                    audioRecorder.startRecording(scope)
+                },
+                onStop = {
+                    audioRecorder.stopRecording()
+                    audioPlayer.stopAndFlush()
+                },
+            )
+        }
+        client.beginNewSession()
         client.connect()
-        audioRecorder.startRecording(scope)
     }
 
     fun stopSession() {
+        val generation = audioSessionLifecycle.end()
         sessionEndPending = false
         isSessionActive = false
         isCameraActive = false
-        audioRecorder.stopRecording()
-        audioPlayer.stopAndFlush()
+        audioRecorder.isMicListeningEnabled = false
+        scope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+            audioSessionLifecycle.stop(generation) {
+                audioRecorder.stopRecording()
+                audioPlayer.stopAndFlush()
+            }
+        }
         client.disconnect()
         setSpeakerphoneRouting(false)
     }
@@ -1082,7 +1099,7 @@ fun TutorScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // 1. Header Bầu trời, Chỉ Báo Minh Bạch Camera & Menu Phụ Huynh
+        // 1. Header Bầu trời: tên, trạng thái camera và cài đặt cùng một hàng.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1121,41 +1138,11 @@ fun TutorScreen(
                 )
             }
 
-            // Nhóm nút Phụ Huynh & Cài Đặt Hệ Thống
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Nút Mở "Góc Phụ Huynh"
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Color.White.copy(alpha = 0.25f))
-                        .clickable { onOpenParentZone() }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("👨‍👩‍👧 Phụ Huynh", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                }
-
-                // Nút Cài Đặt (IP Server & Reset)
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.25f))
-                        .clickable { showSettingsMenu = true },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("⚙️", fontSize = 15.sp)
-                }
-            }
-          }
-          // Camera status stays on a separate line so a chosen name never crowds controls.
-          if (isSessionActive && isEmotionVisionEnabled && !isCameraActive) {
+            if (isSessionActive && isEmotionVisionEnabled && !isCameraActive) {
               Row(
                   verticalAlignment = Alignment.CenterVertically,
                   modifier = Modifier
+                      .padding(start = 8.dp)
                       .clip(RoundedCornerShape(20.dp))
                       .background(Color.White.copy(alpha = 0.35f))
                       .clickable { showPrivacyInfoDialog = true }
@@ -1169,7 +1156,7 @@ fun TutorScreen(
                           "happy" -> "😊 Bé đang vui"
                           "curious" -> "🤔 Nghiêng đầu tò mò"
                           "attentive" -> "👀 Đang lắng nghe"
-                          "focused" -> "✍️ Tập trung học"
+                          "focused" -> "👀 Đang tập trung"
                           "distracted" -> "🎈 Đang nhìn quanh"
                           "sleepy" -> "🌙 Bé hơi buồn ngủ"
                           "no_face" -> "🔍 Đang tìm bé..."
@@ -1178,8 +1165,23 @@ fun TutorScreen(
                       color = Color.White,
                       fontSize = 11.sp,
                       fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
                   )
               }
+            }
+
+            Box(
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.25f))
+                    .clickable { showSettingsMenu = true },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⚙️", fontSize = 15.sp)
+            }
           }
         }
 
@@ -1272,6 +1274,18 @@ fun TutorScreen(
                 containerColor = Color(0xFF0F172A),
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = {
+                                showSettingsMenu = false
+                                onOpenParentZone()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("👨‍👩‍👧 Góc Phụ Huynh", color = Color.White)
+                        }
+
                         // Nút Bật/Tắt Đôi Mắt Cảm Xúc
                         Button(
                             onClick = {
@@ -1479,7 +1493,7 @@ fun TutorScreen(
             emotion = robotEmotion
         )
 
-        // 4. Chip bar cho Encyclopedia / Socratic Mode (khi có gợi ý chủ đề)
+        // 4. Chip chọn chủ đề khi câu hỏi cần làm rõ.
         clarificationRequest?.let { req ->
             Spacer(modifier = Modifier.height(10.dp))
             ClarificationChipBar(
@@ -1496,9 +1510,9 @@ fun TutorScreen(
         // 5. Thanh Điều Khiển Bảo Bối & Nút Chuông Vàng ở chân trang
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             // Nút Bật/Tắt Gương Mắt Thần 📷
             Box(
                 modifier = Modifier
@@ -1537,6 +1551,7 @@ fun TutorScreen(
                     )
                 }
             }
+            }
 
             // NÚT CHUÔNG VÀNG THẦN KỲ (MAGIC BELL MIC) Ở TRUNG TÂM
             MagicBellButton(
@@ -1565,55 +1580,12 @@ fun TutorScreen(
                 }
             )
 
-            // Nút Khám Phá Chủ Đề / Gợi Ý Vui Nhộn ⭐
-            Box(
-                modifier = Modifier
-                    .size(58.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.9f))
-                    .border(
-                        width = 2.dp,
-                        color = Color(0xFFF472B6),
-                        shape = CircleShape
-                    )
-                    .clickable {
-                        loadDiscoveryTopics()
-                        showTopicSheet = true
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(text = "⭐", fontSize = 20.sp)
-                    Text(
-                        text = "Khám phá",
-                        fontSize = 8.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFDB2777)
-                    )
-                }
-            }
+            Spacer(modifier = Modifier.weight(1f))
         }
 
         Spacer(modifier = Modifier.height(10.dp))
     }
 
-    // Modal Chiếc Túi Thần Kỳ 🎒 - Menu Thẻ Chủ Đề Khám Phá Động
-    if (showTopicSheet) {
-        TopicDiscoveryModal(
-            topics = discoveryTopics,
-            isLoading = isLoadingTopics,
-            companionName = companionInfo.name,
-            onDismiss = { showTopicSheet = false },
-            onRefresh = { loadDiscoveryTopics() },
-            onTopicSelected = { topic ->
-                showTopicSheet = false
-                if (!isSessionActive) {
-                    startSession()
-                }
-                client.selectTopic(topic.title, topic.promptHint)
-            }
-        )
-    }
 }
 
 /**
@@ -1656,33 +1628,33 @@ private fun getDoraemonSpeechText(
     childEmotion: String = "neutral"
 ): String {
     if (!isSessionActive) {
-        return "Chào bạn nhỏ! Hãy chạm vào Chuông Vàng để chúng mình cùng trò chuyện và khám phá nhé! ✨"
+        return "Chào bạn nhỏ! Chạm Chuông Vàng rồi kể mình nghe hôm nay của bạn thế nào nhé! ✨"
     }
     if (state == ConnectionState.LISTENING) {
         return when (childEmotion) {
             "happy" -> "Doraemon thấy bé đang cười vui lắm nè! Kể cho mình nghe với nha! 😊✨"
-            "confused" -> "Đừng lo nhé, có Doraemon ở đây rồi! Có câu hỏi nào khó cứ hỏi mình nha! 💡"
+            "confused" -> "Có chuyện gì làm bé băn khoăn à? Mình nghe đây. 💛"
             "sleepy" -> "Bé ơi, bé có thấy mệt không? Cứ thoải mái tâm sự với Doraemon nhé! 🌙"
-            "focused" -> "Bé đang chăm chú làm bài ghê! Doraemon luôn ở bên cạnh bé nè! ✍️"
+            "focused" -> "Bé đang chăm chú ghê. Mình ở đây với bé nè! 👀"
             else -> "Doraemon đang chăm chú lắng nghe bé nói nè! Hãy nói gì đó với mình nhé! 👂"
         }
     }
     return when (state) {
         ConnectionState.SLEEPING -> "Khò khò... Doraemon đang ngủ một lát. Chúc bé ngủ ngon nha! Zzz... 🌙"
-        ConnectionState.THINKING -> "Aha, câu hỏi hay quá! Doraemon đang suy nghĩ câu trả lời cho bạn nhỏ nè... 🤔💡"
+        ConnectionState.THINKING -> "Để Doraemon nghĩ một chút nhé... 🤔"
         ConnectionState.SPEAKING -> {
             when (emotion.emotion) {
-                "excited" -> "Woohoo! Tuyệt vời quá bé ơi! Cùng Doraemon khám phá tiếp nào! 🎉"
-                "proud" -> "Bé thông minh và giỏi quá! Doraemon tự hào về bé lắm! 🌟"
+                "excited" -> "Woohoo! Chuyện này vui ghê bé ơi! 🎉"
+                "proud" -> "Doraemon thấy vui cùng bé lắm! 🌟"
                 "surprised" -> "Ôi ngạc nhiên chưa! Doraemon vừa học thêm một điều thú vị từ bé đấy! 😮"
                 "displeased" -> "Hừm, bé trêu Doraemon đấy à? Đùa xíu thôi, Doraemon thương bé nhất! 😋"
                 "sad" -> "Đừng buồn nhé, có Doraemon luôn ở bên cạnh bé nè! Cố lên nào! ❤️"
-                else -> "Doraemon đang kể cho bé nghe nè, bé lắng nghe nhé! 💬"
+                else -> "Doraemon đang trò chuyện với bé nè! 💬"
             }
         }
         ConnectionState.CONNECTING -> "Đang mở Cửa Thần Kỳ kết nối đến thế giới tương lai... 🚀"
         ConnectionState.ERROR -> "Ôi Cửa Thần Kỳ bị nghẽn một chút, bé thử chạm lại Chuông Vàng nhé! 🔧"
-        else -> "Doraemon sẵn sàng rồi! Chúng mình cùng học tiếng Anh và khám phá khoa học nha! 🎈"
+        else -> "Doraemon ở đây rồi. Bé muốn kể chuyện gì cho mình nghe nào? 🎈"
     }
 }
 

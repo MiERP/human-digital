@@ -583,22 +583,22 @@ class MemoryManager:
         if learning:
             recent_topic = learning[0]
             if recent_topic["needs_practice"]:
-                lines.append(f"- English Practice Focus: Topic '{recent_topic['topic']}', encourage words: {', '.join(recent_topic['needs_practice'])}")
+                lines.append(f"- English Practice History (only if child chooses to practice again): Topic '{recent_topic['topic']}', words: {', '.join(recent_topic['needs_practice'])}")
 
         # Streak & Gamification context
         streak = profile.get("streak_days", 0)
         total_sessions = profile.get("total_sessions_count", 0)
         if streak > 1:
-            lines.append(f"- Streak: Bé đang có chuỗi {streak} ngày học liên tiếp! Hãy khen ngợi tinh thần chăm chỉ của bé!")
+            lines.append(f"- Streak: Bé và bạn robot đã trò chuyện {streak} ngày liên tiếp. Chỉ nhắc nếu hợp câu chuyện, không biến thành điểm học tập.")
         elif total_sessions == 0:
             lines.append(f"- Session: Đây là buổi đầu tiên bé làm quen với {companion_name}. Hãy mở đầu ấm áp và thân thiện!")
 
         last_session = self.get_last_session_summary(child_id)
         if last_session and last_session.get("summary"):
             lines.append(
-                f"- Cuối buổi trò chuyện lần trước, {companion_name} và bé đã chốt lại: "
-                f"{last_session['summary']} "
-                "(hãy nhắc lại tự nhiên đầu buổi hôm nay như một kỷ niệm chung)."
+                f"- Buổi trước hai bạn đã nói về: {last_session['summary']} "
+                "(chỉ nhắc lại nếu bé mở đúng mạch câu chuyện đó; đừng kể lại nguyên văn, "
+                "đừng mở đầu bằng việc ôn lại bài cũ)."
             )
 
         return "\n".join(lines)
@@ -855,7 +855,7 @@ class MemoryManager:
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
                 "description": f"Cùng Doraemon khám phá những bí mật siêu đáng yêu về {fav_animal}!",
-                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: Thế giới loài {fav_animal} (sở thích của bé). Hãy mở đầu bằng một câu chào vui tươi, chia sẻ 1 bí mật bất ngờ về {fav_animal} và đố bé 1 câu hỏi gợi mở nhé!]"
+                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: Thế giới loài {fav_animal} (sở thích của bé). Hãy kể một chi tiết bất ngờ về {fav_animal} trong 1-2 câu như đang cùng xem, rồi để bé tự hỏi tiếp. Không đố, không kiểm tra.]"
             })
         elif hobbies:
             hobby_0 = str(hobbies[0])
@@ -867,7 +867,7 @@ class MemoryManager:
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
                 "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Doraemon!",
-                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: {hobby_0} (sở thích của bé). Hãy mở đầu thân thiện, hỏi bé về sở thích này và đố bé một câu đố vui nhé!]"
+                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: {hobby_0} (sở thích của bé). Hãy hào hứng hỏi bé thích nhất điều gì ở {hobby_0} và kể một trải nghiệm tưởng tượng ngắn. Không đố.]"
             })
         else:
             topics.append({
@@ -878,7 +878,7 @@ class MemoryManager:
                 "color_hex": "#F472B6",
                 "tag": "Khám phá muôn loài",
                 "description": "Giải mã sức mạnh của T-Rex bạo chúa và các loài khủng long kỷ Jura!",
-                "prompt_hint": "[Bé vừa chọn khám phá chủ đề: Khủng Long Kỷ Jura. Hãy mở đầu hào hứng, giới thiệu một sự thật kỳ thú về khủng long và đố bé một câu hỏi nhé!]"
+                "prompt_hint": "[Bé vừa chọn khám phá chủ đề: Khủng Long Kỷ Jura. Hãy hào hứng kể một sự thật kỳ thú về khủng long trong 1-2 câu, rồi hỏi bé nghĩ sao. Không đố.]"
             })
 
         # 2. Thẻ Ôn tập từ vựng thông minh (Spaced Repetition Review)
@@ -892,7 +892,7 @@ class MemoryManager:
                 "color_hex": "#38BDF8",
                 "tag": "Ôn tập từ mới",
                 "description": f"Chinh phục từ vựng '{word_target}' trong các câu chuyện kỳ thú!",
-                "prompt_hint": f"[Bé vừa chọn ôn tập từ vựng tiếng Anh '{word_target}'. Hãy tạo một câu chuyện ngắn thú vị, dạy bé cách phát âm chuẩn và khuyến khích bé nói từ '{word_target}' nhé!]"
+                "prompt_hint": f"[Bé vừa chọn ôn từ '{word_target}'. Hãy dùng từ này trong một câu chuyện ngắn thật tự nhiên, rồi rủ bé nói lại nếu bé muốn. Không kiểm tra, không chấm.]"
             })
         else:
             topics.append({
@@ -903,7 +903,7 @@ class MemoryManager:
                 "color_hex": "#38BDF8",
                 "tag": "Học từ mới",
                 "description": "Luyện phát âm chuẩn bản xứ và học các từ vựng tiếng Anh vui nhộn!",
-                "prompt_hint": "[Bé vừa chọn chủ đề: Tiếng Anh Diệu Kỳ. Hãy mở đầu bằng một câu chào tiếng Anh ấm áp, giới thiệu 1-2 từ mới dễ nhớ và rủ bé cùng đọc theo nhé!]"
+                "prompt_hint": "[Bé vừa chọn chủ đề: Tiếng Anh Diệu Kỳ. Hãy dùng 1-2 từ tiếng Anh trong một câu chuyện ngắn, rồi rủ bé nói theo nếu bé thích. Không biến thành bài học.]"
             })
 
         # 3. Thẻ Theo khung giờ trong ngày (Time-aware)
@@ -917,7 +917,7 @@ class MemoryManager:
                 "color_hex": "#FBBF24",
                 "tag": "Khởi động buổi sáng",
                 "description": "Tìm hiểu xem các bạn động vật thức dậy và ăn sáng thế nào nhé!",
-                "prompt_hint": "[Bé vừa chọn chủ đề: Chào Ngày Mới Rực Rỡ. Hãy chúc bé một buổi sáng tràn đầy năng lượng và hỏi bé đã ăn sáng món gì ngon chưa nhé!]"
+                "prompt_hint": "[Bé vừa chọn chủ đề: Chào Ngày Mới Rực Rỡ. Hãy chúc bé một buổi sáng vui vẻ và hỏi bé đã ăn sáng món gì ngon chưa. Không đố, không nhắc học.]"
             })
         elif 11 <= current_hour < 18:
             topics.append({
@@ -928,7 +928,7 @@ class MemoryManager:
                 "color_hex": "#10B981",
                 "tag": "Khoa học vui",
                 "description": "Tại sao cầu vồng có 7 màu? Tại sao lá cây lại có màu xanh?",
-                "prompt_hint": "[Bé vừa chọn chủ đề: Khoa Học Quanh Em. Hãy chia sẻ một hiện tượng tự nhiên thú vị như Cầu vồng hoặc Lá cây và đố bé giải thích nhé!]"
+                "prompt_hint": "[Bé vừa chọn chủ đề: Khoa Học Quanh Em. Hãy kể một hiện tượng tự nhiên thú vị như cầu vồng hay lá cây, rồi cùng bé đoán vì sao như hai người bạn tò mò. Không kiểm tra.]"
             })
         else:
             topics.append({
@@ -951,7 +951,7 @@ class MemoryManager:
             "color_hex": "#8B5CF6",
             "tag": "Vũ trụ & Thiên văn",
             "description": "Lái Tàu Vũ Trụ đổ bộ lên Mặt Trăng, Sao Hỏa và giải mã Hố Đen!",
-            "prompt_hint": "[Bé vừa chọn chủ đề: Du Hành Vũ Trụ. Hãy thắt dây an toàn, cùng bé bước lên Tàu Vũ Trụ bay tới Sao Hỏa và đố bé về Hệ Mặt Trời nhé!]"
+            "prompt_hint": "[Bé vừa chọn chủ đề: Du Hành Vũ Trụ. Hãy cùng bé tưởng tượng chuyến bay tới Sao Hỏa trong 1-2 câu, rồi để bé tự khám phá tiếp. Không đố.]"
         })
 
         # 5. Thẻ Tiếng Anh Nhập Vai (Roleplay Adventure)
@@ -982,7 +982,7 @@ class MemoryManager:
             "color_hex": "#06B6D4",
             "tag": "Bách khoa thiên nhiên",
             "description": "Lặn sâu ngắm Cá Voi Xanh khổng lồ và thế giới san hô rực rỡ!",
-            "prompt_hint": "[Bé vừa chọn khám phá: Đại Dương Huyền Bí. Hãy lặn sâu xuống đáy biển cùng bé, giới thiệu về Cá Voi Xanh và đố bé một câu hỏi kỳ thú nhé!]"
+            "prompt_hint": "[Bé vừa chọn khám phá: Đại Dương Huyền Bí. Hãy lặn xuống đáy biển cùng bé và kể một điều kỳ thú về Cá Voi Xanh trong 1-2 câu. Không đố.]"
         })
 
         return topics
@@ -1160,43 +1160,31 @@ class MemoryManager:
         }
 
     def build_learning_contract(self, child_id: str = "default_child") -> str:
-        """Dựng khối ngữ cảnh 'học kèo' để nhúng vào System Prompt.
+        """Dựng khối ngữ cảnh học tập để nhúng vào System Prompt.
 
-        Nếu chưa có kế hoạch: hướng dẫn robot chủ động thương lượng lịch với bé.
-        Nếu đã có: nhắc lại lịch đã thống nhất + mức tuân thủ để robot đồng hành.
+        Học là tính năng phụ, chỉ mở khi bé hoặc phụ huynh chủ động. Vì vậy khi
+        chưa có kế hoạch thì KHÔNG chèn gì cả — không khơi gợi, không nhắc lịch,
+        không biến cuộc trò chuyện thành lớp học.
         """
         plan = self.get_learning_plan(child_id)
         if not plan or not plan.get("is_active"):
-            return (
-                "### 📅 Learning Plan (Kế hoạch học tập — CHƯA có):\n"
-                "- Bé chưa có lịch cố định. Chỉ gợi ý một lịch học ngắn khi bé chủ động "
-                "muốn luyện tiếng Anh hoặc cuộc trò chuyện tự nhiên dẫn tới chuyện hẹn gặp; "
-                "không hỏi lịch như một thủ tục đầu buổi.\n"
-                "- Khi bé đồng ý, gọi tool `discuss_study_plan` với days/start_time/"
-                "duration_minutes/focus_topics/weekly_goal và child_agreed=true để chốt.\n"
-                "- Chỉ thống nhất MỘT lịch đơn giản, phù hợp trẻ nhỏ (ví dụ 3 buổi/tuần, "
-                "15-25 phút). Không ép bé."
-            )
+            return ""
 
         days = plan.get("days") or []
         day_labels = ", ".join(
             self._WEEKDAY_VN[self._WEEKDAY_KEYS.index(d)] for d in days if d in self._WEEKDAY_KEYS
         ) or "chưa chọn ngày"
         topics = ", ".join(plan.get("focus_topics") or []) or "tự do theo sở thích bé"
-        adherence = self.get_plan_adherence(child_id, days=7)
-        today_label = self._WEEKDAY_VN[date.today().weekday()]
         return (
-            "### 📅 Learning Plan (Kế hoạch học tập đã thống nhất với bé):\n"
-            f"- Lịch: {day_labels}, lúc {plan.get('start_time', '19:00')}, "
+            "### 📅 Learning Plan (chỉ dùng khi bé hoặc phụ huynh mở lời trước):\n"
+            f"- Lịch hai bạn từng thống nhất: {day_labels}, lúc {plan.get('start_time', '19:00')}, "
             f"mỗi buổi ~{plan.get('duration_minutes', 20)} phút.\n"
-            f"- Mục tiêu tuần: {plan.get('weekly_goal') or 'ôn tập vui vẻ'}.\n"
-            f"- Chủ đề ưu tiên: {topics}.\n"
-            f"- Hôm nay là {today_label}. Bé đã hoàn thành "
-            f"{adherence['done']}/{adherence['planned']} buổi theo lịch trong tuần này.\n"
-            "- Có thể nhắc nhẹ về buổi học đã hẹn, rồi để bé chọn bắt đầu bằng câu chuyện "
-            "hay trò chơi. Lồng bài tập nói ngắn vào chủ đề bé thích; nếu bé đang buồn, "
-            "từ chối học, hoặc muốn kể chuyện, hãy lắng nghe trước. Khi hết thời lượng, "
-            "tóm tắt điều đã khám phá và hỏi bé có muốn nghỉ; không tự ngắt phiên."
+            f"- Mục tiêu: {plan.get('weekly_goal') or 'khám phá vui vẻ'}.\n"
+            f"- Chủ đề bé từng chọn: {topics}.\n"
+            "- KHÔNG tự nhắc lịch, không hỏi \"hôm nay học gì\", không lồng bài tập hay mục tiêu "
+            "học vào câu chuyện thường ngày. Chỉ dùng thông tin này khi bé chủ động rủ học. "
+            "Khi bé học, giữ nhịp khám phá vui vẻ; hết thời lượng thì hỏi nhẹ bé muốn tiếp tục "
+            "trò chuyện hay nghỉ, không tự ngắt phiên."
         )
 
     # ==================== Device Registry & Ban Methods ====================

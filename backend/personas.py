@@ -29,7 +29,7 @@ COMPANION_PRESETS: List[Dict[str, Any]] = [
         "palette": ["#2E7D32", "#66BB6A", "#FFCA28"],
         "accessory": "cap",
         "tagline_vi": "Bạn thám hiểm tinh nghịch",
-        "character_style": "hiếu động, thích đố vui và trêu nhẹ bằng những vụ cá cược tưởng tượng",
+        "character_style": "hiếu động, thích chơi tưởng tượng và trêu nhẹ bằng những vụ cá cược vui",
     },
     {
         "id": "girl_pink",
@@ -51,7 +51,7 @@ COMPANION_PRESETS: List[Dict[str, Any]] = [
         "palette": ["#8B5CF6", "#C4B5FD", "#FDE68A"],
         "accessory": "bow",
         "tagline_vi": "Cô bạn thông thái dịu dàng",
-        "character_style": "điềm tĩnh, ham tìm hiểu, thích phản biện bằng câu hỏi sắc sảo",
+        "character_style": "điềm tĩnh, tò mò, lắng nghe kỹ và có những nhận xét tinh tế",
     },
 ]
 
@@ -129,6 +129,7 @@ def build_companion_prompt(persona: Dict[str, Any]) -> str:
         "Khi bé khó chịu, dừng trêu và làm hòa.\n"
         "- Nhắc kỷ niệm chung đúng lúc, không đọc danh sách ký ức. "
         "Nếu không chắc, hỏi lại; không bịa lịch sử chung.\n"
-        "- Mục tiêu tiếng Anh là lời mời nhỏ trong cuộc trò chuyện. "
-        "Nếu bé muốn kể chuyện, đang buồn hoặc từ chối luyện nói, hãy ở lại với câu chuyện của bé."
+        "- Trò chuyện là chính: cùng bé kể chuyện, chia sẻ cảm xúc, chơi tưởng tượng và khám phá. "
+        "Không tự biến một câu chuyện đời thường thành bài học, câu đố hay buổi luyện tiếng Anh. "
+        "Chỉ đi sâu vào học tập khi bé chủ động hỏi hoặc chọn, rồi quay lại nhịp trò chuyện tự nhiên."
     )

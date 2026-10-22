@@ -1,11 +1,57 @@
 package com.example.digitalhuman.ui
 
 import com.example.digitalhuman.network.ConnectionState
+import com.example.digitalhuman.network.RobotEmotion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CompanionMotionTest {
+    @Test fun emotionSelectsDistinctFaceAndLightTreatments() {
+        assertEquals(AvatarExpression.HAPPY, companionVisualState(ConnectionState.SPEAKING, RobotEmotion(emotion = "happy"), 0.5f, 0f).expression)
+        assertEquals(AvatarExpression.SAD, companionVisualState(ConnectionState.LISTENING, RobotEmotion(emotion = "sad"), 0f, 0f).expression)
+        assertEquals(AvatarExpression.STRICT, companionVisualState(ConnectionState.SPEAKING, RobotEmotion(emotion = "strict"), 0.5f, 0f).expression)
+        assertEquals(AvatarExpression.THINKING, companionVisualState(ConnectionState.THINKING, RobotEmotion(), 0f, 0f).expression)
+        assertEquals(AvatarExpression.SLEEPY, companionVisualState(ConnectionState.SLEEPING, RobotEmotion(emotion = "happy"), 1f, 0f).expression)
+        assertEquals(AvatarExpression.SLEEPY, companionVisualState(ConnectionState.LISTENING, RobotEmotion(energy = "drowsy"), 0f, 0f).expression)
+    }
+
+    @Test fun speakingAlternatesArmsAndLightsFollowSafeAudioLevel() {
+        val first = companionVisualState(ConnectionState.SPEAKING, RobotEmotion(), 0.2f, 0f)
+        val second = companionVisualState(ConnectionState.SPEAKING, RobotEmotion(), 0.2f, 1f)
+        val louder = companionVisualState(ConnectionState.SPEAKING, RobotEmotion(), 1f, 0f)
+        assertTrue(first.leftArmDegrees < second.leftArmDegrees)
+        assertTrue(first.rightArmDegrees < second.rightArmDegrees)
+        assertTrue(second.leftArmDegrees - first.leftArmDegrees > 3f)
+        assertTrue(louder.lightEnergy > first.lightEnergy)
+        assertTrue(louder.mouthOpen > first.mouthOpen)
+        assertTrue(first.leftArmDegrees in -12f..12f)
+        assertTrue(first.rightArmDegrees in -12f..12f)
+    }
+
+    @Test fun sleepDisablesSpeechMotionAndUnknownMoodIsNeutral() {
+        val asleep = companionVisualState(ConnectionState.SLEEPING, RobotEmotion(), 1f, 1f)
+        val unknown = companionVisualState(ConnectionState.LISTENING, RobotEmotion(emotion = "unexpected"), Float.NaN, 0f)
+        assertEquals(0f, asleep.leftArmDegrees, 0.001f)
+        assertEquals(0f, asleep.rightArmDegrees, 0.001f)
+        assertEquals(0f, asleep.mouthOpen, 0.001f)
+        assertTrue(asleep.lightEnergy < 0.3f)
+        assertEquals(AvatarExpression.NEUTRAL, unknown.expression)
+        assertTrue(unknown.lightEnergy.isFinite())
+    }
+
+    @Test fun avatarBobsAtRestAndPausesWhileSleeping() {
+        assertTrue(companionBobOffset(ConnectionState.LISTENING, 0f, 0f) < 0f)
+        assertTrue(companionBobOffset(ConnectionState.LISTENING, 0f, 1f) > 0f)
+        assertEquals(0f, companionBobOffset(ConnectionState.SLEEPING, 1f, 0.5f), 0.001f)
+    }
+
+    @Test fun speakingBobRespondsMoreStronglyToLouderAudio() {
+        val quiet = companionBobOffset(ConnectionState.SPEAKING, 0f, 0f)
+        val loud = companionBobOffset(ConnectionState.SPEAKING, 1f, 0f)
+        assertTrue(loud < quiet)
+    }
+
     @Test fun listeningMovesEyesAndArmsWithoutTalking() {
         val motion = companionMotion(ConnectionState.LISTENING, 0f)
         assertTrue(motion.gazeX < 0f)

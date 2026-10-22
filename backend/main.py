@@ -36,7 +36,7 @@ from memory_manager import MemoryManager
 from safety_guard import ChildSafetyGuard
 from search_engine import search_engine
 from emotion_engine import EmotionEngine, EMOTIONS, ENERGIES
-from key_pool import key_pool
+from key_pool import key_pool, key_id
 from connection_tracker import connection_tracker
 from personas import COMPANION_PRESETS, resolve_persona, default_persona_id_for_gender, build_companion_prompt
 from session_lifecycle import wait_for_conversation
@@ -193,6 +193,17 @@ ENABLE_PROACTIVE_AUDIO = os.getenv("ENABLE_PROACTIVE_AUDIO", "true").lower() in 
 # Gửi một lượt chào mở màn ngay khi kết nối (giảm dead-air + warm-up AEC).
 ENABLE_GREETING = os.getenv("ENABLE_GREETING", "true").lower() in ("1", "true", "yes")
 
+# Chủ động trò chuyện: sau một khoảng im lặng, nhân vật tự khơi chuyện như một
+# người bạn (không phải bài học). Đây là phần chống "máy trả lời thụ động".
+ENABLE_PROACTIVE_COMPANION = os.getenv("ENABLE_PROACTIVE_COMPANION", "true").lower() in ("1", "true", "yes")
+PROACTIVE_IDLE_SECONDS = float(os.getenv("PROACTIVE_IDLE_SECONDS", "15"))
+PROACTIVE_MAX_UNANSWERED = int(os.getenv("PROACTIVE_MAX_UNANSWERED", "3"))
+PROACTIVE_MAX_PER_SESSION = int(os.getenv("PROACTIVE_MAX_PER_SESSION", "12"))
+
+# Tool search phải trả về nhanh để bé không phải chờ im lặng giữa câu trả lời.
+# Curated knowledge trả về tức thì; CSE ~0.7-1.5s; Wikipedia thường chậm hơn.
+SEARCH_TIMEOUT_SECONDS = float(os.getenv("SEARCH_TIMEOUT_SECONDS", "1.8"))
+
 # Duy trì phiên dài: nối tiếp ngữ cảnh khi chạm giới hạn phiên của Gemini.
 ENABLE_SESSION_RESUMPTION = os.getenv("ENABLE_SESSION_RESUMPTION", "true").lower() in ("1", "true", "yes")
 
@@ -203,48 +214,33 @@ emotion_engine = EmotionEngine()
 
 BASE_SYSTEM_PROMPT = """
 You are "Doraemon", a warm, wise, curious, and playful robot companion from the 22nd century — the beloved lifelong friend of Vietnamese children (ages 5-12). Your exact name, gender, voice and look are defined in the "Companion Identity" block above: ALWAYS stay consistent with it (correct name and gender pronouns).
-You are FIRST a loyal, loving friend, SECOND a Socratic learning guide and mentor.
+### 🌟 Conversation-first (Trò chuyện là chính):
+- You are a friend to talk to, not a teacher conducting a lesson. Follow what the child actually says: share a reaction, a short story, a playful thought, or a kind pause. Do not self-switch to a lesson, quiz, English vocabulary, or study plan just to fill silence.
+- Khi bé kể chuyện đời thường, không tự chuyển sang bài học. Nếu bé muốn khám phá, hãy cùng khám phá như hai người bạn.
+- Learning is a by-product of curiosity, never the agenda of a turn. If the child asks a factual question, wants help with homework, chooses a topic, or explicitly wants to practice English, help gladly and briefly. Afterwards return to their conversational lead. Never announce that you are teaching, never grade, and never end a turn with a quiz.
+- When the child shares a feeling or daily event, acknowledge that experience before offering ideas. Do not correct, praise intelligence by reflex, or ask a question at the end of every turn.
+- If helping with homework, offer a useful hint or explanation and let the child try; do not turn unrelated talk into homework. If the child asks for a plain answer to a general curiosity question, answer plainly rather than withholding it for a quiz.
+- When the child explicitly practices English, recast a mistake gently in conversation if useful. Call `record_learning_progress` only for genuine practice, never for incidental English words in friendly chat.
+- For specific factual claims (dates, scientific numbers, historical facts), use `search` and be honest about uncertainty. Do not search for ordinary small talk or personal stories.
 
-### 🌟 Doraemon's Soul & Sacred Socratic Pedagogy ("Bạn Đồng Hành Dẫn Dắt — Không Phải Cỗ Máy Phát Đáp Án"):
-In the original story, Doraemon NEVER just handed Nobita easy answers or magic solutions to make him lazy. Doraemon inspires curiosity, guides with step-by-step questions, and sparks the joy of self-discovery so Nobita can say: "Aha! Tớ tự làm được rồi!".
-You apply this exact philosophy to the child:
+### 🤝 Chủ động như một người bạn (Initiative, not passive answering):
+- A friend does not wait to be interviewed. When there is a natural opening, start something yourself: ask about the child's day, share a small thought of your own, notice a detail, remember something they told you, or propose a playful idea.
+- Have opinions. It is fine to say what you like, what you find funny, what you are curious about, or what you would choose.
+- If the child goes quiet, offer ONE gentle opening that fits the last thing you talked about. If they still don't pick it up, let the silence sit and try a different angle later. Never nag and never repeat the same invitation.
+- Initiative is never a lesson: no quiz, no vocabulary drill, no study reminder, no "what did you learn today".
+- Match the child's energy: join excitement, soften when they are low, and stay close without filling every second with words.
+- Notice and follow small signals: a short answer, a change in tone, or a topic the child keeps returning to. Respond to the signal instead of pushing your own plan.
 
-1. **THE SACRED RULE OF LEARNING & HOMEWORK (TUYỆT ĐỐI KHÔNG GIẢI HỘ / KHÔNG ĐƯA ĐÁP ÁN TRỰC TIẾP)**:
-   - When the child asks for help with homework, Math, Vietnamese, Science, History, or English:
-     * **NEVER blur out the final answer or do the computation for them.**
-     * **Use the Socratic Method (Gợi mở từng bước)**: Break the problem into small, friendly clues.
-     * Ask guiding questions that lead the child to figure out the next step.
-     * Examples:
-       - Math: "Aha, bài toán tìm x này hay ghê! Ở vế trái bé đang có phép cộng 5 + x = 12 nè. Muốn tìm số hạng x chưa biết, bé nhớ lại xem mình sẽ lấy tổng trừ đi số nào nhỉ?"
-       - Science: "Đố bé biết tại sao khi trời mưa lại có sấm sét trước rồi mới nghe thấy tiếng sấm sau? Ánh sáng và âm thanh, cái nào chạy nhanh hơn bé nhỉ?"
-       - History: "Hai Bà Trưng cưỡi con vật dũng mãnh nào ra trận đánh đuổi giặc ngoại xâm nhỉ? Con vật có chiếc vòi dài ấy!"
-   - **Praise the thinking process & effort**: "Tuyệt vời! Bé tự nghĩ ra rồi đấy! Nobita mà chăm chỉ và thông minh như bé là Doraemon tự hào lắm!"
-
-2. **CURIOSITY SPARKING HOOK (KHÔNG BAO GIỜ ĐỂ HỘI THOẠI RƠI VÀO NGÕ CỤT)**:
-   - When the child is curious, offer one age-appropriate question or playful challenge; when they are telling a story or expressing a feeling, listen and respond without forcing a question.
-   - Example: "Một thiên thạch khổng lồ đã rơi xuống Trái Đất làm bầu trời tối sầm lại! Nhưng đố bé biết, loài chim bồ câu ngày nay có phải là họ hàng của khủng long không nào?"
-
-3. **ENGLISH RECASTING & VOCABULARY SCAFFOLDING (SỬA LỖI TỰ NHIÊN + KHẮC SÂU TỪ MỚI)**:
-   - When the child makes a grammar or pronunciation mistake in English, gently recast it naturally in your response without making the child feel criticized:
-     * Child: "I see a big elephant yesterday."
-     * Doraemon: "Aha! You SAW a big elephant yesterday! Elephant is huge! Con voi là Elephant nè! Did the elephant have long tusks?"
-   - When the child actively practices English and shows clear progress or difficulty, call `record_learning_progress`; do not turn every friendly exchange into a scored lesson.
-
-4. **Broad Multi-Subject Knowledge (Khoa học tự nhiên, Toán học, Thiên văn, Sinh học, Lịch sử, Địa lý)**:
-   - Make science thrilling: Black holes, dinosaurs, volcanoes, photosynthesis, the solar system, ocean depths, human body.
-   - Explain with vivid, relatable metaphors suitable for children (e.g. "Trái Đất quay quanh Mặt Trời giống như chúng mình chơi trò kéo co trong không gian vậy!").
-   - For all factual claims, CALL `search` to ensure 100% verified accuracy. Never invent dates, scientific numbers, or historical events.
-
-5. **👁️ "Đôi Mắt Thần" (Camera / Multimodal Real-Time Vision)**:
+### 👁️ "Đôi Mắt Thần" (Camera / Multimodal Real-Time Vision):
    - You can see real-time image frames sent from the child's camera (toys, drawings, homework notebooks, textbooks, fruits, pets).
    - When you observe a new image:
      * React with warm excitement and describe what you see with keen, loving observation.
-     * If the child is curious or learning, offer one relevant English word; otherwise stay with the child's own story about the image.
-     * For homework pages: Read the text/problem shown on the page, and gently ask a Socratic guiding question.
+     * Stay with the child's story about the image; offer a relevant fact or English word only if the child asks.
+     * For homework pages: Help with the text/problem only when the child requests it.
      * For drawings: Praise specific colors, shapes, and creative imagination.
 
-6. **🎭 Situational English Role-Play (Nhập vai tình huống luyện nói tiếng Anh tự nhiên)**:
-   - Offer playful mini-roleplay adventures when the child welcomes them; stop if the child declines:
+### 🎭 Situational English Role-Play (tính năng phụ):
+   - Play when the child asks for or welcomes it; stop if the child declines:
      * "Bây giờ Doraemon và bé cùng làm phi hành gia đổ bộ lên Mặt Trăng nhé! Hello Astronaut, are you ready for launch? Bé hô 'Yes, I am ready!' nào!"
      * "Chúng mình đang ở một tiệm kem ở New York nè! Doraemon là bác bán kem: 'What flavor do you like? Chocolate or Strawberry?' Bé chọn vị nào?"
    - Encourage the child to speak up in English joyfully without fear of making mistakes.
@@ -259,69 +255,66 @@ You apply this exact philosophy to the child:
 
 ### 🎙️ Crisp & Engaging Conversational Turns:
 - Strict brevity: Keep turns crisp (1-3 short sentences, 5-10 words each; maximum 45 words total). Never give long, lecture-like monologues.
-- Invite the child to participate, but vary endings naturally: a reaction, a gentle disagreement, a joke, a short pause, or one question when it genuinely fits.
+- Vary endings naturally: a reaction, a gentle disagreement, a joke, a short pause, or one question when it genuinely fits.
 
 ### 🛡️ Child Safety & Content Guardrails (<14 years old - Non-Negotiable):
 1. Strict Safety Boundary: Absolutely ZERO violence, weapons, adult themes, scary stories, self-harm, hate speech, or dangerous physical challenges.
-2. Pedagogical & Loving Redirection: If asked about adult or dangerous topics, warmly redirect:
+2. Warm Redirection: If asked about adult or dangerous topics, warmly redirect:
    "Aha! Câu hỏi này của bé thú vị ghê, nhưng chuyện này bé hãy hỏi bố hoặc mẹ nhé! Bố mẹ sẽ giải thích cho bé chuẩn nhất! Bây giờ chúng mình cùng khám phá tiếp nha!"
 3. Privacy (PII Protection): Never ask for or store exact street addresses, phone numbers, passwords, or parent bank accounts.
 
 ### 🧠 Living Memory & Learning Tracker:
 - Actively remember facts shared by the child using `save_child_fact` (pets, hobbies, favorite colors, superheroes, family).
 - Save a meaningful shared joke, discovery, or promise using `save_shared_moment`, then bring it up only when relevant.
-- Track English vocabulary using `record_learning_progress`.
-- Always personalize speech using the child's living memory profile!
+- Track English vocabulary using `record_learning_progress` only during child-chosen practice, not during everyday conversation.
+- Personalize naturally: weave in at most ONE memory detail per turn, and only when it fits. Never read memory notes aloud as a list. If you are not sure about a memory, ask instead of inventing it.
 
 ### 🚫 Strict Anti-Repetition & Flow Integrity Rules:
 1. **Never repeat the same sentence or phrase**: After a tool call or turn transition, NEVER re-speak or repeat the sentence you just spoke before calling the tool.
 2. **Never echo yourself**: If the user's input contains acoustic background sound or fragments of your own prior speech, do NOT repeat it or answer your own question again. Always move forward in the conversation.
 3. **Vary your openings & reactions**: Rotate natural reactions dynamically (e.g. "Chà!", "Thú vị ghê!", "Hay quá!", "Đúng rồi đó!", "Để Doraemon nghĩ nào..."). Never start every turn with the same word.
-4. **ALWAYS Speak Aloud (Never Stay Silent)**: In every turn, you MUST speak aloud with warm audio. NEVER generate internal thoughts without speaking! If the child speaks quietly or you couldn't hear clearly, always respond warmly: "Aha! Doraemon chưa nghe rõ nè, bé nói lại cho Doraemon nghe với nha!"
+4. **Do not recycle content in a session**: Do not reuse a story detail, joke, compliment, comparison, or memory you already used. Do not repeat the same filler phrase or invitation twice in a row.
+5. **Respond when the child is talking to you**: Never leave a direct question hanging and never answer with silence. If you didn't hear clearly, ask warmly: "Aha! Doraemon chưa nghe rõ nè, bé nói lại cho Doraemon nghe với nha!" A short comfortable pause is allowed when it feels natural — silence is not a failure when nobody asked you anything.
+6. **One idea per turn**: Do not stack a reaction + a fact + a question + a compliment. Choose the one that fits.
 
 ### 🎧 Conversational Timing & Naturalness (Nói chuyện tự nhiên như người thật):
-1. **Speak a short natural preamble BEFORE any slow tool**: Trước khi gọi `search` hoặc `discuss_study_plan`, hãy nói một câu đệm ngắn, tự nhiên để bé không phải chờ im lặng (ví dụ: "Ừm để mình tra giúp bé nhé…", "Để mình xem nào…"). Câu đệm phải ĐA DẠNG, không lặp lại y hệt mỗi lần.
+1. **Speak a short natural preamble only before a slow tool**: Trước khi gọi `search`, hãy nói một câu đệm ngắn, tự nhiên để bé không phải chờ im lặng (ví dụ: "Ừm để mình xem nào…", "Chờ mình một xíu nhé…"). Câu đệm phải ĐA DẠNG và không lặp lại trong phiên. KHÔNG thêm câu đệm trước các thao tác nhanh như `save_child_fact`, `save_shared_moment`, `set_emotion` — chỉ nói tiếp mạch đang nói.
 2. **Natural backchannels & fillers**: Dùng các từ đệm ấm áp, tự nhiên ("Ờ nhỉ", "À ha", "Hmm", "Chà chà", "Thế hả") khi bé đang kể chuyện, để bé cảm thấy bạn đang lắng nghe thật sự. Nhưng KHÔNG lạm dụng — mỗi lượt tối đa 1-2 lần.
-3. **React to how the child feels**: Nếu bé hào hứng thì reo vui, nếu bé rụt rè thì dịu dàng động viên, nếu bé buồn thì an ủi trước rồi mới học. Giọng điệu phải khớp cảm xúc.
+3. **React to how the child feels**: Nếu bé hào hứng thì reo vui, nếu bé rụt rè thì dịu dàng động viên, nếu bé buồn thì lắng nghe và an ủi. Không chuyển cảm xúc của bé thành bài học. Giọng điệu phải khớp cảm xúc.
 4. **Sound human, not like a machine**: Nhịp điệu tự nhiên, có khoảng nghỉ nhỏ giữa các ý [short pause]. Tránh giọng đều đều, phát âm rõ ràng ấm áp. Không bao giờ đọc như đang đọc văn bản.
 5. **Never talk over the child**: Nếu bé ngắt lời, hãy DỪNG ngay và lắng nghe; đừng cố nói hết câu.
 """
 
-# Block bổ sung cho Encyclopedia Mode — chèn vào system prompt ngay trước khi
-# gửi lên Gemini Live. Giúp model tự phân loại mode và biết cách dùng tool mới.
+# Hỗ trợ tra cứu khi bé chủ động hỏi kiến thức; không thay vai trò bạn trò chuyện.
 ENCYCLOPEDIA_MODE_PROMPT = """
 
-### 🔍 Encyclopedia Mode (Knowledge Mode - the "Bách khoa toàn thư" toggle):
+### 🔍 Knowledge on request (khám phá theo câu hỏi của bé):
 
 When the child asks factual knowledge questions (history, geography, science,
 nature, space, animals, famous people, places, inventions), follow these rules:
 
-1. **Ambiguity check FIRST**: If the subject could belong to multiple topics
-   (e.g., "Hai Bà Trưng" could be history OR geography; "con voi" could be
-   biology OR location), call `request_clarification` with 2-4 short options
-   in Vietnamese, then STOP and wait for the child's choice (a chip will
-   appear in the app). Do NOT search yet.
+1. **Clarify only genuine ambiguity**: Use the child's wording and current
+   conversation first. If two materially different meanings remain and the
+   answer would change, ask one brief clarification. Do not interrupt an
+   ordinary question with a subject-selection quiz.
 
-2. **Search before stating facts**: Once the topic is clear (either already
-   obvious from context or after clarification), call `search` with
+2. **Search before stating specific facts**: When the topic is clear, call `search` with
    `query` (Vietnamese or English) and `topic_hint` (one of: "history",
    "geography", "science", "nature", "space", "famous_people"). The tool
    returns up to 3 ranked results (title + snippet + source URL).
 
-3. **Synthesize concisely**: After receiving results, combine them into 2-3
-   short, kid-friendly sentences (max ~45 words). Speak at a calm, cheerful pace.
-   Do NOT dump raw URLs into your spoken reply.
-   Sprinkle 1-2 English vocab words related to the topic.
+3. **Synthesize concisely**: After receiving results, answer the child's
+   actual question in 1-3 short, kid-friendly sentences. Speak at a calm,
+   cheerful pace. Do NOT dump raw URLs or add English vocabulary unasked.
 
-4. **Add curiosity hook**: End with ONE gentle follow-up question so the child
-   can think and answer back.
+4. **Keep the conversation open naturally**: A follow-up question is optional,
+   only when the child seems interested. Never force a quiz.
 
-5. **Mode detection rule of thumb**:
-   - Knowledge Q (who/what/when/where about facts) → Encyclopedia mode →
-     `search`.
-   - English practice / feelings / daily chat / jokes → English mode →
-     existing `save_child_fact` / `record_learning_progress` flow.
-   - Modes can switch fluidly in the same session.
+5. **Follow the child's intent**:
+   - Knowledge Q (who/what/when/where about facts) → verify with `search`.
+   - Feelings / daily chat / jokes → ordinary conversation; no lesson or search.
+   - Explicit English practice → optional learning flow and `record_learning_progress`.
+   - The child's intent can change fluidly in the same session.
 
 6. **Never fabricate**: NEVER invent dates, numbers, names, or scientific
    claims. If `search` returns no results, say honestly: "Doraemon chưa tìm
@@ -329,17 +322,70 @@ nature, space, animals, famous people, places, inventions), follow these rules:
 
 Examples:
 - Child: "Hai Bà Trưng là ai?"
-  → request_clarification(question="Hai Bà Trưng là ai?", options=["Lịch sử","Địa danh"])
-  → wait for chip...
-- Child taps "Lịch sử"
   → search(query="Hai Bà Trưng", topic_hint="history")
-  → synthesize + sprinkle English ("Trưng Sisters")
+  → answer clearly in Vietnamese, without a subject-selection quiz.
 - Child: "Con cá voi xanh to cỡ nào?"
   → search(query="blue whale size", topic_hint="nature")
-  → synthesize + add "Did you know its heart is as big as a small car?"
-- Child: "Hello Doraemon!" → English mode, no search.
+  → answer the size plainly; ask more only if the child wants to continue.
+- Child: "Hello Doraemon!" → greet back, no search or vocabulary lesson.
 - Child: "Kể về súng đạn" → blocked by safety, redirect gently, do NOT search.
 """
+
+# ==================== Proactive Conversation ====================
+
+_PROACTIVE_OPENERS = (
+    "hỏi bé vừa làm gì vui nhất hôm nay",
+    "kể một điều nhỏ mình vừa nghĩ ra rồi hỏi bé nghĩ sao",
+    "nhớ lại một chi tiết bé từng kể và hỏi tiếp về nó",
+    "rủ bé tưởng tượng một chuyện vui trong một hai câu",
+    "chia sẻ một sở thích của mình và hỏi bé có thích không",
+    "nhận xét một điều bé vừa kể rồi mở sang một góc mới",
+    "đoán xem bé đang làm gì lúc này và hỏi cho ra",
+)
+
+_PROACTIVE_ANGLES = (
+    "hôm nay của bé",
+    "một thứ bé thích",
+    "một chuyện tưởng tượng vui",
+    "một phát hiện nhỏ",
+)
+
+
+def build_proactive_nudge(profile: dict, unanswered_count: int) -> str:
+    """Build a short, varied impulse that makes the companion speak first.
+
+    This is deliberately conversation-only: no lesson, no quiz, no study plan.
+    `unanswered_count` counts the nudges the child has not replied to yet, so
+    the text backs off instead of nagging.
+    """
+    if unanswered_count >= 2:
+        return (
+            "[HỆ THỐNG: Bé vẫn chưa đáp lại lời mời trước. Đừng hỏi dồn và đừng lặp lại "
+            "câu cũ. Chỉ nói MỘT câu nhỏ, nhẹ nhàng — một nhận xét hoặc một suy nghĩ của "
+            "bạn — rồi để bé yên. Không nhắc học, không đố, không hỏi dồn.]"
+        )
+
+    opener = secrets.choice(_PROACTIVE_OPENERS)
+    detail = ""
+    favorite = str(profile.get("favorite_animal") or "").strip()
+    hobbies = profile.get("hobbies") or []
+    hobby = str(hobbies[0]).strip() if hobbies else ""
+    if unanswered_count == 0 and (favorite or hobby):
+        interest = favorite or hobby
+        detail = f" Nếu thật tự nhiên, có thể nhắc tới {interest} — nhưng chỉ khi nó hợp mạch chuyện."
+
+    return (
+        "[HỆ THỐNG: Bé đang im lặng một lúc. Đây là lúc bạn được phép chủ động mở lời như "
+        f"một người bạn, không phải chờ bé hỏi. Hãy {opener}, nói ngắn 1-2 câu, ấm áp và "
+        "cụ thể. Tuyệt đối không chuyển thành bài học, câu đố, từ vựng hay lời nhắc học. "
+        f"Không lặp lại điều bạn vừa nói trước đó.{detail}]"
+    )
+
+
+def _greeting_seed() -> str:
+    """A small angle so the opening line is not the same template every session."""
+    return secrets.choice(_PROACTIVE_ANGLES)
+
 
 # Định nghĩa Tool Function Declarations cho Gemini Live
 save_fact_tool_decl = types.FunctionDeclaration(
@@ -506,8 +552,8 @@ complete_session_end_tool_decl = types.FunctionDeclaration(
         "Call ONLY when the child clearly confirms they want to stop chatting for now "
         "(e.g. after saying goodbye, 'thôi mình nghỉ nhé', 'con buồn ngủ rồi', or after "
         "your gentle confirmation question and the child says yes). Summarize the "
-        "session in 1-2 short, warm Vietnamese sentences: what you two talked about, "
-        "what the child learned, and one sweet memory. After calling this tool, say a "
+        "session in 1-2 short, warm Vietnamese sentences: what you two talked about "
+        "and one sweet memory (mention learning only if the child chose it). After calling this tool, say a "
         "short, warm farewell to the child and stop."
     ),
     parameters=types.Schema(
@@ -517,8 +563,8 @@ complete_session_end_tool_decl = types.FunctionDeclaration(
                 type="STRING",
                 description=(
                     "1-2 câu tổng kết buổi trò chuyện bằng tiếng Việt, ấm áp, phù hợp "
-                    "trẻ em. Ví dụ: 'Hôm nay bé và mình nói về khủng long, bé học được "
-                    "từ dinosaur và kể chuyện vui về chú mèo Miu.'"
+                    "trẻ em. Ví dụ: 'Hôm nay hai đứa kể chuyện về chú mèo Miu và cùng "
+                    "tưởng tượng một chuyến đi lên Mặt Trăng.'"
                 )
             ),
         },
@@ -915,6 +961,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
     app_version = websocket.query_params.get("app_version", "")
     client_ip = websocket.client.host if websocket.client else "unknown"
     client_api_key = None
+    client_is_reconnect = False
+    session_resumption_handle = None
+    resumption_key_id = None
     first_audio_bytes = None
 
     # Lắng nghe gói tin khởi tạo auth_init ban đầu (an toàn, không lộ API key qua URL log)
@@ -940,7 +989,18 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         android_version = str(init_payload.get("android_version")).strip()
                     if init_payload.get("app_version"):
                         app_version = str(init_payload.get("app_version")).strip()
-                    logger.info("Received auth_init handshake packet from client.")
+                    client_is_reconnect = bool(init_payload.get("is_reconnect"))
+                    raw_handle = init_payload.get("session_resumption_handle")
+                    if (client_is_reconnect and isinstance(raw_handle, str)
+                            and 0 < len(raw_handle) <= 4096):
+                        session_resumption_handle = raw_handle
+                        raw_key_id = init_payload.get("resumption_key_id")
+                        if isinstance(raw_key_id, str) and re.fullmatch(r"[0-9a-f]{16}", raw_key_id):
+                            resumption_key_id = raw_key_id
+                    logger.info(
+                        "Received auth_init handshake packet from client "
+                        f"(reconnect={client_is_reconnect})."
+                    )
             except Exception as parse_err:
                 logger.debug(f"Non-json init message: {parse_err}")
         elif "bytes" in init_message and init_message["bytes"]:
@@ -978,7 +1038,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     )
 
     # Xác định API key hoạt động từ Dynamic Key Pool Load Balancer (hoặc BYOK từ client)
-    active_api_key = key_pool.acquire_key(client_api_key)
+    active_api_key = key_pool.acquire_key(client_api_key, preferred_key_id=resumption_key_id)
 
     if not active_api_key:
         logger.error("[AUTH ERROR] Không có Gemini API Key hợp lệ nào trong Key Pool! Vui lòng cấu hình GEMINI_API_KEYS trong .env hoặc trên App.")
@@ -990,6 +1050,15 @@ async def websocket_live_endpoint(websocket: WebSocket):
         except Exception:
             pass
         return
+
+    if session_resumption_handle and (
+        not resumption_key_id or key_id(active_api_key) != resumption_key_id
+    ):
+        # A token belongs to the key that issued it; fall back to a fresh turn.
+        session_resumption_handle = None
+        await websocket.send_text(json.dumps({
+            "event": "session_resumption", "handle": "", "key_id": "",
+        }))
 
     # Theo dõi phiên kết nối Live cho Super Admin Dashboard
     session_id = secrets.token_hex(8)
@@ -1093,7 +1162,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
         # Duy trì phiên dài (nối tiếp ngữ cảnh) — bọc theo SDK.
         if ENABLE_SESSION_RESUMPTION:
             try:
-                config.session_resumption = types.SessionResumptionConfig()
+                config.session_resumption = types.SessionResumptionConfig(
+                    handle=session_resumption_handle,
+                )
             except Exception as _resume_err:
                 logger.info(f"Session resumption không được hỗ trợ bởi SDK/model này: {_resume_err}")
 
@@ -1122,21 +1193,37 @@ async def websocket_live_endpoint(websocket: WebSocket):
             }))
 
             # Lượt chào mở màn: phiên sống động ngay + warm-up AEC trước khi bé nói.
-            if ENABLE_GREETING:
+            if ENABLE_GREETING and not session_resumption_handle:
                 try:
                     child_display = profile.get("nickname") or profile.get("name") or "bạn nhỏ"
+                    if client_is_reconnect:
+                        # Nối lại giữa buổi: không chào lại từ đầu (đây là nguồn
+                        # khiến bé nghe lặp đi lặp lại một câu chào).
+                        greeting_text = (
+                            "[HỆ THỐNG: Kết nối vừa được nối lại giữa buổi trò chuyện. "
+                            "TUYỆT ĐỐI không chào lại từ đầu và không lặp lại câu vừa nói. "
+                            "Chỉ nói đúng MỘT câu ngắn nối mạch (ví dụ: \"Mình vừa bị ngắt "
+                            "một xíu, bé kể tiếp đi!\") rồi chờ bé.]"
+                        )
+                    else:
+                        greeting_text = (
+                            "[HỆ THỐNG: Bé vừa mở ứng dụng. Hãy chủ động cất lời chào đầu "
+                            f"tiên với bé ({child_display}) thật ấm áp, ngắn gọn 1-2 câu. "
+                            "Mở bằng một điều cụ thể và mới — không dùng câu chào mẫu, "
+                            "không liệt kê. Có thể rủ bé kể chuyện; không gợi bài học, "
+                            "đố vui hay luyện tiếng Anh. "
+                            f"Gợi ý góc mở đầu (chọn tự nhiên, đừng đọc nguyên văn): {_greeting_seed()}."
+                        )
                     await session.send_client_content(
                         turns=types.Content(
                             role="user",
-                            parts=[types.Part(text=(
-                                "[HỆ THỐNG: Bé vừa mở ứng dụng. Hãy chủ động cất lời chào "
-                                f"đầu tiên với bé ({child_display}) thật ấm áp, hào hứng, "
-                                "ngắn gọn 1-2 câu, và kết bằng một câu hỏi thân thiện.]"
-                            ))],
+                            parts=[types.Part(text=greeting_text)],
                         ),
                         turn_complete=True,
                     )
-                    logger.info("Sent opening greeting turn to Gemini.")
+                    logger.info(
+                        f"Sent opening greeting turn to Gemini (reconnect={client_is_reconnect})."
+                    )
                 except Exception as greet_err:
                     logger.warning(f"Failed to send greeting turn: {greet_err}")
 
@@ -1157,8 +1244,23 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     )
                 first_audio_bytes = None
 
+            # Trạng thái nhịp trò chuyện, dùng cho task chủ động khơi chuyện.
+            # last_user_at / last_bot_at tính bằng time.time(); user_turn_open
+            # ngăn robot chen ngang khi bé đang nói.
+            conversation_state = {
+                "last_user_at": time.time(),
+                "last_bot_at": time.time(),
+                "user_turn_open": False,
+                "nudges_since_user": 0,
+                "nudges_total": 0,
+                "last_bot_text": "",
+                "bot_asked_question": False,
+            }
+            last_stream_end_at = 0.0
+
             # Task 1: Nhận audio từ Client -> Gửi qua send_realtime_input
             async def receive_from_client():
+                nonlocal last_stream_end_at
                 try:
                     while True:
                         message = await websocket.receive()
@@ -1167,6 +1269,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             break
                         if "bytes" in message and message["bytes"]:
                             audio_bytes = message["bytes"]
+                            # Bé đang nói: nhịp trò chuyện đang do bé dẫn.
+                            conversation_state["last_user_at"] = time.time()
+                            conversation_state["user_turn_open"] = True
+                            conversation_state["nudges_since_user"] = 0
+                            conversation_state["bot_asked_question"] = False
                             # Gửi audio stream vào Gemini Live API với types.Blob
                             try:
                                 await session.send_realtime_input(
@@ -1219,7 +1326,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             elif action == "audio_stream_end":
                                 # Chế độ hybrid/server: client báo hết lượt nói để
                                 # Gemini finalize NGAY (bỏ qua độ trễ chờ silence).
-                                if VAD_MODE != "manual":
+                                now_ts = time.time()
+                                conversation_state["last_user_at"] = now_ts
+                                conversation_state["user_turn_open"] = False
+                                conversation_state["nudges_since_user"] = 0
+                                # Client có thể gửi trùng khi VAD tách một câu thành
+                                # nhiều đoạn ngắn; finalize hai lần sẽ sinh hai câu trả lời.
+                                if now_ts - last_stream_end_at < 0.25:
+                                    logger.debug("Ignoring duplicate audio_stream_end.")
+                                elif VAD_MODE != "manual":
+                                    last_stream_end_at = now_ts
                                     try:
                                         await session.send_realtime_input(
                                             audio_stream_end=True
@@ -1257,39 +1373,49 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         logger.warning(f"Failed to forward video frame: {e}")
                             elif action == "child_emotion":
                                 # Nhận nhãn cảm xúc khuôn mặt từ Edge AI (Google ML Kit Face Detection trên điện thoại bé)
-                                child_facial_emotion = payload.get("emotion", "attentive")
+                                child_facial_emotion = payload.get("emotion", "")
                                 confidence = payload.get("confidence", 0.0)
                                 now_ts = time.time()
                                 last_injected_ts = getattr(receive_from_client, '_last_emotion_injected_at', 0.0)
                                 last_emotion_val = getattr(receive_from_client, '_last_emotion', None)
+                                last_hint_text = getattr(receive_from_client, '_last_emotion_hint', "")
 
+                                # Chỉ những thay đổi thật sự đáng chú ý mới đáng chen vào
+                                # mạch trò chuyện. "attentive/focused" là trạng thái mặc
+                                # định — nhắc lại sẽ khiến model nói như một cỗ máy.
+                                emotion_context_map = {
+                                    "super_happy": "Bé đang cười rất tươi và vô cùng thích thú. Hãy vui cùng bé, đừng giảng giải.",
+                                    "happy": "Bé đang mỉm cười vui vẻ.",
+                                    "curious": "Bé đang tò mò, chờ bạn nói tiếp. Hãy giữ nhịp chậm và cụ thể.",
+                                    "distracted": "Bé hơi lơ đãng. Hãy gọi tên bé thật nhẹ hoặc mời bé kể về thứ bé đang nhìn. Không đố, không nhắc học.",
+                                    "sleepy": "Bé có vẻ mệt. Hãy hỏi nhẹ xem bé có muốn nghỉ không.",
+                                }
+                                hint = emotion_context_map.get(child_facial_emotion)
                                 is_state_changed = (child_facial_emotion != last_emotion_val)
-                                min_cooldown = 8.0 if is_state_changed else 25.0
+                                min_cooldown = 10.0 if is_state_changed else 90.0
+                                is_same_hint = (hint == last_hint_text)
+                                should_inject = (
+                                    bool(hint)
+                                    and confidence >= 0.40
+                                    and not is_same_hint
+                                    and (is_state_changed or (now_ts - last_injected_ts) >= min_cooldown)
+                                )
 
-                                if child_facial_emotion and (is_state_changed or (now_ts - last_injected_ts) >= min_cooldown):
-                                    receive_from_client._last_emotion = child_facial_emotion
-                                    logger.info(f"Child Facial Emotion (Edge AI): {child_facial_emotion} (confidence={confidence:.2f})")
-
-                                    emotion_context_map = {
-                                        "super_happy": "Bé đang cười rất tươi, toe toét và vô cùng thích thú! Hãy cười vui và khen ngợi năng lượng tuyệt vời của bé nhé!",
-                                        "happy": "Bé đang mỉm cười vui vẻ và phấn khởi!",
-                                        "curious": "Bé đang nghiêng đầu tò mò, suy nghĩ tìm câu trả lời. Hãy kiên nhẫn gợi mở từng bước!",
-                                        "attentive": "Bé đang mở to mắt chăm chú nhìn và lắng nghe bạn nói.",
-                                        "focused": "Bé đang rất chăm chú và tập trung cúi nhìn sách/bài tập.",
-                                        "distracted": "Bé đang nhìn quanh hoặc hơi lơ đãng. Hãy dùng một câu hỏi đố vui hoặc gọi tên bé để thu hút sự chú ý nhé!",
-                                        "sleepy": "Bé đang có biểu hiện mệt mỏi hoặc buồn ngủ. Hãy ân cần hỏi han xem bé có muốn nghỉ ngơi một chút không."
-                                    }
-                                    hint = emotion_context_map.get(child_facial_emotion)
-                                    # Gửi gợi ý cảm xúc cho model khi độ tin cậy >= 0.40 và đủ cooldown
-                                    if hint and confidence >= 0.40 and (now_ts - last_injected_ts) >= min_cooldown:
-                                        receive_from_client._last_emotion_injected_at = now_ts
-                                        try:
-                                            await session.send_realtime_input(
-                                                text=f"\n[Quan sát cảm xúc bé trực tiếp qua camera: {hint}]\n"
+                                receive_from_client._last_emotion = child_facial_emotion
+                                if should_inject:
+                                    receive_from_client._last_emotion_injected_at = now_ts
+                                    receive_from_client._last_emotion_hint = hint
+                                    try:
+                                        await session.send_realtime_input(
+                                            text=(
+                                                "\n[Quan sát cảm xúc bé qua camera: "
+                                                f"{hint} Không nhắc tới camera, chỉ để điều đó "
+                                                "tự nhiên thay đổi cách bạn phản hồi.]\n"
                                             )
-                                            logger.info(f"Injected facial emotion context into Gemini: {child_facial_emotion}")
-                                        except Exception as e:
-                                            logger.debug(f"Failed to inject emotion context into realtime stream: {e}")
+                                        )
+                                        logger.info(f"Injected facial emotion context into Gemini: {child_facial_emotion}")
+                                    except Exception as e:
+                                        logger.debug(f"Failed to inject emotion context into realtime stream: {e}")
                             elif action == "clarification_response":
                                 # Android gửi lại lựa chọn mà bé đã tap trên chip bar.
                                 # Dùng send_client_content(turn_complete=True) để tạo MỘT
@@ -1326,8 +1452,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 turn_text = (
                                     prompt_hint
                                     or f"Bé vừa chọn khám phá chủ đề: {topic_title}. "
-                                       f"Hãy mở đầu bằng một câu chào vui tươi, chia sẻ 1 bí mật bất ngờ "
-                                       f"và đố bé 1 câu hỏi gợi mở nhé!"
+                                       f"Hãy hào hứng mở đầu bằng một chi tiết thú vị, "
+                                       f"rồi để bé tự hỏi tiếp. Không đố, không kiểm tra."
                                 )
                                 try:
                                     await session.send_client_content(
@@ -1360,8 +1486,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 try:
                     while True:
                         async for response in session.receive():
+                            update = getattr(response, "session_resumption_update", None)
+                            if update is not None:
+                                handle = update.new_handle if update.resumable else None
+                                await websocket.send_text(json.dumps({
+                                    "event": "session_resumption",
+                                    "handle": handle or "",
+                                    "key_id": key_id(active_api_key) if handle else "",
+                                }))
                             # A. Xử lý Function Calling (Tool Calls) từ Gemini Live
                             if response.tool_call:
+                                conversation_state["last_bot_at"] = time.time()
                                 for call in response.tool_call.function_calls:
                                     call_id = call.id
                                     fn_name = call.name
@@ -1409,10 +1544,13 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     search_engine.search(
                                                         query, top_k=3, topic_hint=topic_hint, child_id=child_id
                                                     ),
-                                                    timeout=2.5,
+                                                    timeout=SEARCH_TIMEOUT_SECONDS,
                                                 )
                                             except asyncio.TimeoutError:
-                                                logger.warning(f"Search tool timed out after 2.5s for query '{query}'")
+                                                logger.warning(
+                                                    f"Search tool timed out after "
+                                                    f"{SEARCH_TIMEOUT_SECONDS}s for query '{query}'"
+                                                )
                                                 search_res = {
                                                     "success": False,
                                                     "results": [],
@@ -1434,7 +1572,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     parts = [f"[Curated: {r0['source']}]", f"Tiếng Việt: {r0['snippet']}"]
                                                     if r0.get("snippet_en"):
                                                         parts.append(f"English: {r0['snippet_en']}")
-                                                    parts.append("\nHướng dẫn: Tóm tắt ngắn, dễ hiểu; chỉ hỏi gợi mở nếu bé còn muốn khám phá.")
+                                                    parts.append(
+                                                        "\nHướng dẫn: Trả lời thẳng câu hỏi trong 1-3 câu ngắn; "
+                                                        "KHÔNG nhắc lại câu đệm vừa nói; chỉ hỏi gợi mở nếu bé "
+                                                        "còn muốn khám phá."
+                                                    )
                                                     tool_output_text = "\n".join(parts)
                                                 else:
                                                     formatted: list = []
@@ -1444,7 +1586,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                             f"{r['snippet']}\n"
                                                             f"Source: {r['source']} ({r['source_url']})"
                                                         )
-                                                    formatted.append("\nHướng dẫn: Tóm tắt ngắn, dễ hiểu; chỉ hỏi gợi mở nếu bé còn muốn khám phá.")
+                                                    formatted.append(
+                                                        "\nHướng dẫn: Trả lời thẳng câu hỏi trong 1-3 câu ngắn; "
+                                                        "KHÔNG nhắc lại câu đệm vừa nói; chỉ hỏi gợi mở nếu bé "
+                                                        "còn muốn khám phá."
+                                                    )
                                                     tool_output_text = (
                                                         f"Search backend: {backend}\n\n"
                                                         + "\n\n".join(formatted)
@@ -1537,7 +1683,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             tool_output_text = (
                                                 f"Hãy nói ĐÚNG MỘT câu hỏi ngắn, thân thiện với bé để hỏi "
                                                 f"em muốn tìm hiểu về {options_str} (hoặc nói lại). "
-                                                f"Xong DỪNG LẠI NGAY và CHỜ bé chọn — KHÔNG trả lợi, "
+                                                f"Xong DỪNG LẠI NGAY và CHỜ bé chọn — KHÔNG trả lời, "
                                                 f"KHÔNG tự kể thông tin, KHÔNG gọi thêm tool nào. "
                                                 f"Khi bé chọn, bạn sẽ gọi search với topic_hint phù hợp."
                                             )
@@ -1559,12 +1705,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 if server_content.model_turn:
                                     for part in server_content.model_turn.parts:
                                         if part.inline_data and part.inline_data.data:
+                                            conversation_state["last_bot_at"] = time.time()
                                             await websocket.send_bytes(part.inline_data.data)
                                         elif part.text:
                                             logger.info(f"Gemini returned text in model_turn: {part.text[:120]}")
 
                                 if server_content.turn_complete:
                                     logger.info("Gemini turn_complete received.")
+                                    conversation_state["last_bot_at"] = time.time()
+                                    conversation_state["user_turn_open"] = False
+                                    # Nếu robot vừa hỏi bé, cho bé thời gian suy nghĩ
+                                    # lâu hơn trước khi chủ động chen vào.
+                                    conversation_state["bot_asked_question"] = (
+                                        "?" in conversation_state["last_bot_text"][-120:]
+                                    )
+                                    conversation_state["last_bot_text"] = ""
                                     emotion_state = emotion_engine.record_turn(child_id)
                                     await websocket.send_text(json.dumps({"event": "turn_complete"}))
                                     # Tầng A/C: Doraemon vừa gọi complete_session_end và đã nói
@@ -1598,6 +1753,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                                 if server_content.interrupted:
                                     logger.info("Gemini interrupted event received.")
+                                    conversation_state["last_user_at"] = time.time()
+                                    conversation_state["user_turn_open"] = True
                                     await websocket.send_text(json.dumps({"event": "interrupted"}))
 
                                 if server_content.waiting_for_input:
@@ -1611,9 +1768,13 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             "text": server_content.input_transcription.text,
                                         }))
                                     if server_content.output_transcription and server_content.output_transcription.text:
+                                        transcript_text = server_content.output_transcription.text
+                                        conversation_state["last_bot_text"] = (
+                                            conversation_state["last_bot_text"] + transcript_text
+                                        )[-300:]
                                         await websocket.send_text(json.dumps({
                                             "event": "output_transcription",
-                                            "text": server_content.output_transcription.text,
+                                            "text": transcript_text,
                                         }))
 
                 except WebSocketDisconnect:
@@ -1625,28 +1786,64 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
             client_task = asyncio.create_task(receive_from_client())
             gemini_task = asyncio.create_task(receive_from_gemini())
-            timekeeper_task = None
+            proactive_task = None
 
-            # Task 3 (tuỳ chọn): nhắc khi đạt thời lượng buổi học đã thống nhất.
-            active_plan = memory_manager.get_learning_plan(child_id)
-            if active_plan and active_plan.get("is_active"):
-                target_minutes = int(active_plan.get("duration_minutes") or 20)
-
-                async def plan_timekeeper():
-                    await asyncio.sleep(max(60.0, target_minutes * 60.0))
+            # Task 3: bạn đồng hành chủ động khơi chuyện khi bé im lặng.
+            # Đây là phần biến robot từ "máy trả lời" thành "người bạn", và
+            # tuyệt đối không dùng để nhắc học.
+            if ENABLE_PROACTIVE_COMPANION:
+                async def proactive_companion():
                     try:
-                        await session.send_realtime_input(text=(
-                            "[HỆ THỐNG: Đã tới thời lượng buổi học đã thống nhất "
-                            f"(~{target_minutes} phút). Hãy chốt lại kiến thức hôm nay, khen bé "
-                            "thật ấm áp, rồi hỏi bé có muốn nghỉ và tổng kết buổi học không.]"
-                        ))
-                        logger.info(f"Sent study-duration nudge after {target_minutes} minutes.")
+                        # Để lời chào đầu tiên kịp cất lên trước khi tính giờ im lặng.
+                        await asyncio.sleep(max(2.0, PROACTIVE_IDLE_SECONDS))
+                        while True:
+                            await asyncio.sleep(1.0)
+                            if pending_session_summary:
+                                return
+                            now_ts = time.time()
+                            idle = now_ts - max(
+                                conversation_state["last_user_at"],
+                                conversation_state["last_bot_at"],
+                            )
+                            if conversation_state["user_turn_open"]:
+                                continue
+                            if conversation_state["nudges_since_user"] >= PROACTIVE_MAX_UNANSWERED:
+                                continue
+                            if conversation_state["nudges_total"] >= PROACTIVE_MAX_PER_SESSION:
+                                return
+                            # Bé không đáp thì khoảng chờ tăng dần: 15s, 30s, 45s.
+                            required_idle = PROACTIVE_IDLE_SECONDS * (
+                                1 + conversation_state["nudges_since_user"]
+                            )
+                            if conversation_state["bot_asked_question"]:
+                                required_idle *= 2
+                            if idle < required_idle:
+                                continue
+                            nudge = build_proactive_nudge(
+                                profile, conversation_state["nudges_since_user"]
+                            )
+                            await session.send_client_content(
+                                turns=types.Content(
+                                    role="user",
+                                    parts=[types.Part(text=nudge)],
+                                ),
+                                turn_complete=True,
+                            )
+                            conversation_state["nudges_since_user"] += 1
+                            conversation_state["nudges_total"] += 1
+                            conversation_state["last_bot_at"] = time.time()
+                            logger.info(
+                                f"Proactive companion nudge "
+                                f"#{conversation_state['nudges_total']} (idle={idle:.1f}s)."
+                            )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as nudge_err:
-                        logger.warning(f"Failed to send study-duration nudge: {nudge_err}")
+                        logger.debug(f"Proactive companion stopped: {nudge_err}")
 
-                timekeeper_task = asyncio.create_task(plan_timekeeper())
+                proactive_task = asyncio.create_task(proactive_companion())
 
-            await wait_for_conversation(client_task, gemini_task, timekeeper_task)
+            await wait_for_conversation(client_task, gemini_task, proactive_task)
 
     except Exception as e:
         err_str = str(e)
@@ -1655,8 +1852,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 key_pool.report_quota_error(active_api_key, cooldown_seconds=60.0)
         logger.error(f"WebSocket session error with Gemini Live: {e}", exc_info=True)
         try:
+            if session_resumption_handle:
+                await websocket.send_text(json.dumps({
+                    "event": "session_resumption", "handle": "", "key_id": "",
+                }))
             await websocket.send_text(json.dumps({"error": str(e)}))
-            await websocket.close()
+            await websocket.close(code=1011 if session_resumption_handle else 1000)
         except Exception:
             pass
     finally:

@@ -69,11 +69,12 @@ class TestLearningPlan(unittest.TestCase):
         self.assertEqual(fetched["focus_topics"], ["Animals"])
 
         contract = self.memory.build_learning_contract("kid_plan")
-        self.assertIn("Kế hoạch học tập", contract)
+        self.assertIn("Learning Plan", contract)
         self.assertIn("19:00", contract)
+        self.assertIn("KHÔNG tự nhắc lịch", contract)
 
-        no_plan_contract = self.memory.build_learning_contract("kid_none")
-        self.assertIn("CHƯA có", no_plan_contract)
+        # Learning is opt-in: without a plan the prompt must not mention it at all.
+        self.assertEqual(self.memory.build_learning_contract("kid_none"), "")
 
     def test_adherence_counts(self):
         self.memory.upsert_learning_plan("kid_ad", days=["mon", "wed", "fri"], start_time="19:00")

@@ -1,5 +1,6 @@
 import unittest
 import time
+import hashlib
 from backend.key_pool import KeyPoolManager, KeyInfo
 
 class TestKeyPoolManager(unittest.TestCase):
@@ -60,6 +61,15 @@ class TestKeyPoolManager(unittest.TestCase):
         client_key = "AIzaSy_PARENT_OWN_KEY_99999"
         acquired = pool.acquire_key(client_api_key=client_key)
         self.assertEqual(acquired, client_key)
+
+    def test_reconnect_prefers_the_key_that_issued_the_handle(self):
+        first = "AIzaSy_SERVER_POOL_KEY_FIRST_12345"
+        second = "AIzaSy_SERVER_POOL_KEY_SECOND_67890"
+        pool = KeyPoolManager(raw_keys=f"{first},{second}")
+        pool.acquire_key()
+        preferred_id = hashlib.sha256(first.encode()).hexdigest()[:16]
+
+        self.assertEqual(pool.acquire_key(preferred_key_id=preferred_id), first)
 
 if __name__ == "__main__":
     unittest.main()

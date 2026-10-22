@@ -37,6 +37,12 @@ class TestCompanionExperience(unittest.TestCase):
         self.assertIn("phản biện", playful)
         self.assertIn("AI", thoughtful)
 
+    def test_persona_prioritizes_conversation_over_unsolicited_lessons(self):
+        prompt = build_companion_prompt(resolve_persona({"companion_persona": "girl_purple"}))
+        self.assertIn("trò chuyện là chính", prompt.lower())
+        self.assertIn("không tự biến", prompt.lower())
+        self.assertIn("khi bé chủ động", prompt)
+
     def test_shared_moment_survives_and_is_selected_for_next_session(self):
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryManager(db_path=os.path.join(tmp, "child.db"))

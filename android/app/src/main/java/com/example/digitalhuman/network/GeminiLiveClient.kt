@@ -64,9 +64,17 @@ class GeminiLiveClient(
 ) {
     companion object {
         private const val TAG = "GeminiLiveClient"
+
+        // Dùng chung một OkHttpClient cho mọi lần kết nối. Tạo mới mỗi lần
+        // connect() sẽ rò rỉ thread/dispatcher và làm chậm lúc mở phiên.
+        private val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .pingInterval(10, TimeUnit.SECONDS)
+                .build()
+        }
     }
 
-    private var client: OkHttpClient? = null
     private var webSocket: WebSocket? = null
     @Volatile
     private var currentState = ConnectionState.IDLE
@@ -75,25 +83,53 @@ class GeminiLiveClient(
     private val maxReconnectAttempts = 5
     private var shouldReconnect = true
 
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var reconnectRunnable: Runnable? = null
+
+    // Mỗi lần connect() tăng generation. Callback của socket cũ bị bỏ qua,
+    // nhờ vậy không có hai socket cùng đẩy audio/lời chào về app.
+    @Volatile
+    private var connectionGeneration = 0
+    @Volatile
+    private var hasConnectedOnce = false
+    private val sessionResumption = SessionResumptionState()
+
+    private var lastStreamEndAt = 0L
+    private var audioSentSinceStreamEnd = false
+
     private fun scheduleReconnect() {
         if (!shouldReconnect || reconnectAttempts >= maxReconnectAttempts) return
+        if (reconnectRunnable != null) return // đã có một lần hẹn, không hẹn chồng
         val delayMs = minOf(1000L * (1 shl reconnectAttempts), 30000L) // exponential backoff, max 30s
         reconnectAttempts++
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        val runnable = Runnable {
+            reconnectRunnable = null
             if (shouldReconnect) connect()
-        }, delayMs)
+        }
+        reconnectRunnable = runnable
+        mainHandler.postDelayed(runnable, delayMs)
+    }
+
+    private fun cancelScheduledReconnect() {
+        reconnectRunnable?.let { mainHandler.removeCallbacks(it) }
+        reconnectRunnable = null
     }
 
     fun connect() {
         shouldReconnect = true
+        cancelScheduledReconnect()
         if (currentState == ConnectionState.CONNECTING || currentState == ConnectionState.CONNECTED) return
 
         updateState(ConnectionState.CONNECTING)
+        connectionGeneration++
+        val generation = connectionGeneration
 
-        client = OkHttpClient.Builder()
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .pingInterval(10, TimeUnit.SECONDS)
-            .build()
+        // Đóng socket cũ trước khi mở socket mới.
+        try {
+            webSocket?.close(1000, "Reconnecting")
+        } catch (_: Exception) {
+        }
+        webSocket = null
 
         // Attach child_id as query parameter (API key được truyền an toàn qua auth_init JSON, không để lộ qua URL)
         val httpUrl = serverUrl
@@ -107,17 +143,27 @@ class GeminiLiveClient(
             .url(url)
             .build()
 
-        webSocket = client?.newWebSocket(request, object : WebSocketListener() {
+        webSocket = sharedClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (generation != connectionGeneration) return
                 Log.d(TAG, "WebSocket connected successfully.")
                 reconnectAttempts = 0
                 updateState(ConnectionState.CONNECTED)
+
+                val isReconnect = hasConnectedOnce
 
                 // Gửi gói tin auth_init bảo mật ngay sau khi mở kết nối
                 try {
                     val initPayload = JSONObject().apply {
                         put("action", "auth_init")
                         put("child_id", childId)
+                        put("is_reconnect", isReconnect)
+                        if (isReconnect) {
+                            sessionResumption.handleForReconnect()?.let {
+                                put("session_resumption_handle", it)
+                                put("resumption_key_id", sessionResumption.keyIdForReconnect())
+                            }
+                        }
                         if (!deviceFingerprint.isNullOrBlank()) {
                             put("device_fingerprint", deviceFingerprint)
                         }
@@ -139,12 +185,14 @@ class GeminiLiveClient(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                if (generation != connectionGeneration) return
                 // Nhận raw PCM audio 24kHz từ Gemini
                 val audioData = bytes.toByteArray()
                 onAudioReceived(audioData)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (generation != connectionGeneration) return
                 try {
                     val json = JSONObject(text)
                     if (json.has("event")) {
@@ -177,6 +225,12 @@ class GeminiLiveClient(
                                 Log.d(TAG, "Gemini turn interrupted by user.")
                                 updateState(ConnectionState.LISTENING)
                                 onInterrupted()
+                            }
+                            "session_resumption" -> {
+                                sessionResumption.acceptUpdate(
+                                    json.optString("handle", ""),
+                                    json.optString("key_id", ""),
+                                )
                             }
                             "waiting_for_input" -> {
                                 Log.d(TAG, "Gemini waiting_for_input received.")
@@ -224,6 +278,9 @@ class GeminiLiveClient(
                             }
                         }
                     } else if (json.has("status") && json.getString("status") == "ready") {
+                        // Chỉ tính là "đã kết nối" khi server thực sự mở được phiên.
+                        // Nếu lần đầu fail giữa handshake, lần sau vẫn được chào hỏi.
+                        hasConnectedOnce = true
                         updateState(ConnectionState.LISTENING)
                         // Trạng thái cảm xúc khởi đầu gửi kèm trong gói "ready".
                         parseEmotion(json.optJSONObject("emotion"))
@@ -236,6 +293,7 @@ class GeminiLiveClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (generation != connectionGeneration) return
                 // Backend đóng WebSocket (code 1000) sau khi session kết thúc êm đềm:
                 // không phải lỗi — giữ nguyên trạng thái "Robo đang ngủ".
                 if (currentState == ConnectionState.SLEEPING) {
@@ -248,6 +306,7 @@ class GeminiLiveClient(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (generation != connectionGeneration) return
                 Log.d(TAG, "WebSocket closed: $reason")
                 if (currentState != ConnectionState.SLEEPING) {
                     updateState(ConnectionState.DISCONNECTED)
@@ -261,7 +320,9 @@ class GeminiLiveClient(
 
     fun sendAudioChunk(chunk: ByteArray) {
         if (currentState != ConnectionState.DISCONNECTED && currentState != ConnectionState.ERROR) {
-            webSocket?.send(chunk.toByteString())
+            if (webSocket?.send(chunk.toByteString()) == true) {
+                audioSentSinceStreamEnd = true
+            }
         }
     }
 
@@ -317,6 +378,13 @@ class GeminiLiveClient(
      * bỏ qua độ trễ chờ silence của server (giảm lag phản hồi mạnh).
      */
     fun notifyAudioStreamEnd() {
+        val now = System.currentTimeMillis()
+        // VAD có thể tách một câu thành nhiều đoạn ngắn. Gửi finalize hai lần
+        // sẽ khiến server sinh hai câu trả lời cho cùng một lượt nói.
+        if (!audioSentSinceStreamEnd || now - lastStreamEndAt < 300L) {
+            Log.d(TAG, "notifyAudioStreamEnd: no new audio since last end, skipping.")
+            return
+        }
         val ws = webSocket
         if (ws == null) {
             Log.w(TAG, "notifyAudioStreamEnd: webSocket is null, dropping signal.")
@@ -327,8 +395,11 @@ class GeminiLiveClient(
             return
         }
         try {
-            ws.send(JSONObject().put("action", "audio_stream_end").toString())
-            Log.d(TAG, "Sent audio_stream_end signal.")
+            if (ws.send(JSONObject().put("action", "audio_stream_end").toString())) {
+                lastStreamEndAt = now
+                audioSentSinceStreamEnd = false
+                Log.d(TAG, "Sent audio_stream_end signal.")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send audio_stream_end: ${e.message}", e)
         }
@@ -428,14 +499,25 @@ class GeminiLiveClient(
         }
     }
 
+    /**
+     * Bé chủ động mở một phiên mới (không phải reconnect tự động).
+     * Lần kết nối đầu tiên của phiên sẽ được chào hỏi bình thường.
+     */
+    fun beginNewSession() {
+        hasConnectedOnce = false
+        sessionResumption.beginNewSession()
+    }
+
     fun disconnect() {
         shouldReconnect = false
+        cancelScheduledReconnect()
+        connectionGeneration++
         try {
             webSocket?.close(1000, "User disconnect")
-            client?.dispatcher?.executorService?.shutdown()
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        webSocket = null
         updateState(ConnectionState.DISCONNECTED)
     }
 

@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,11 +22,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -37,7 +37,7 @@ import com.example.digitalhuman.network.CompanionInfo
 import com.example.digitalhuman.network.ConnectionState
 import com.example.digitalhuman.network.RobotEmotion
 
-/** Robo is drawn in layers: stable shell, independently moving arms and screen face. */
+/** Layered illustration: each arm, face, and light can respond to the conversation independently. */
 @Composable
 fun CompanionAvatar(
     state: ConnectionState,
@@ -46,174 +46,178 @@ fun CompanionAvatar(
     companion: CompanionInfo = CompanionInfo(),
     modifier: Modifier = Modifier,
 ) {
-    val sprite = ImageBitmap.imageResource(R.drawable.robo_avatar)
-    val loop = rememberInfiniteTransition(label = "robo_face")
+    val body = ImageBitmap.imageResource(R.drawable.robo_body)
+    val arms = ImageBitmap.imageResource(R.drawable.robo_arms)
+    val loop = rememberInfiniteTransition(label = "companion_life")
+    val phase by loop.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+        label = "hover_and_gesture",
+    )
     val blink by loop.animateFloat(
         initialValue = 1f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(keyframes {
-            durationMillis = 3700
+            durationMillis = 3900
             1f at 0
-            1f at 3300
-            0.08f at 3410
-            1f at 3540
+            1f at 3450
+            0.08f at 3570
+            1f at 3700
         }),
-        label = "blink",
+        label = "eye_blink",
     )
-    val gesture by loop.animateFloat(
-        initialValue = 0f,
+    val lightBeat by loop.animateFloat(
+        initialValue = 0.82f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse),
-        label = "hand_gesture",
+        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
+        label = "light_breath",
     )
-    val pose = companionMotion(state, amplitude, gesture)
-    val leftArm by animateFloatAsState(pose.leftArmDegrees, tween(180), label = "left_arm")
-    val rightArm by animateFloatAsState(pose.rightArmDegrees, tween(180), label = "right_arm")
-    val leftElbow by animateFloatAsState(pose.leftElbowDegrees, tween(240), label = "left_elbow")
-    val rightElbow by animateFloatAsState(pose.rightElbowDegrees, tween(240), label = "right_elbow")
-    val gazeX by animateFloatAsState(pose.gazeX, tween(220), label = "gaze_x")
-    val gazeY by animateFloatAsState(pose.gazeY, tween(220), label = "gaze_y")
-    val eyeOpen by animateFloatAsState(pose.eyeOpen, tween(120), label = "eye_open")
-    val mouth by animateFloatAsState(pose.talkLevel, tween(75), label = "mouth")
-    val opacity by animateFloatAsState(pose.opacity, tween(300), label = "robo_opacity")
+    val visual = companionVisualState(state, emotion, amplitude, phase)
+    val motion = companionMotion(state, amplitude)
+    val leftArm by animateFloatAsState(visual.leftArmDegrees, tween(180), label = "left_arm")
+    val rightArm by animateFloatAsState(visual.rightArmDegrees, tween(180), label = "right_arm")
+    val mouth by animateFloatAsState(visual.mouthOpen, tween(90), label = "mouth")
+    val light by animateFloatAsState(visual.lightEnergy, tween(240), label = "lights")
+    val opacity by animateFloatAsState(motion.opacity, tween(300), label = "body_opacity")
+    val bob = companionBobOffset(state, amplitude, phase) * when (visual.expression) {
+        AvatarExpression.SLEEPY -> 0.25f
+        AvatarExpression.SAD, AvatarExpression.STRICT -> 0.6f
+        else -> 1f
+    }
 
-    Box(modifier = modifier.size(280.dp), contentAlignment = Alignment.Center) {
-        Canvas(
-            modifier = Modifier.fillMaxSize().semantics {
-                contentDescription = "${companion.name} đang ${stateLabel(state)}"
-            },
-        ) {
-            val imageScale = size.height / sprite.height
-            val imageLeft = (size.width - sprite.width * imageScale) / 2f
-            fun point(x: Float, y: Float) = Offset(imageLeft + x * imageScale, y * imageScale)
-            fun region(x: Int, y: Int, width: Int, height: Int) {
-                drawImage(
-                    image = sprite,
-                    srcOffset = IntOffset(x, y),
-                    srcSize = IntSize(width, height),
-                    dstOffset = IntOffset(point(x.toFloat(), y.toFloat()).x.toInt(), point(x.toFloat(), y.toFloat()).y.toInt()),
-                    dstSize = IntSize((width * imageScale).toInt(), (height * imageScale).toInt()),
-                    alpha = opacity,
-                )
-            }
-
-            // Upper arms sit behind the body; forearms can move in front without exposing an armpit gap.
-            fun armOutline(vararg corners: Pair<Float, Float>) = Path().apply {
-                corners.forEachIndexed { index, (x, y) ->
-                    val corner = point(x, y)
-                    if (index == 0) moveTo(corner.x, corner.y) else lineTo(corner.x, corner.y)
-                }
-                close()
-            }
-            val leftUpperArm = armOutline(
-                0f to 765f, 305f to 765f, 305f to 955f,
-                240f to 1025f, 165f to 1025f, 125f to 1000f, 0f to 1000f,
-            )
-            val leftForearm = armOutline(
-                145f to 995f, 210f to 995f, 232f to 1050f,
-                255f to 1370f, 0f to 1370f, 80f to 1070f,
-            )
-            val rightUpperArm = armOutline(
-                800f to 765f, 1105f to 765f, 1105f to 1000f,
-                980f to 1000f, 940f to 1025f, 865f to 1025f, 800f to 955f,
-            )
-            val rightForearm = armOutline(
-                895f to 995f, 960f to 995f, 1025f to 1070f,
-                1105f to 1370f, 850f to 1370f, 873f to 1050f,
-            )
-            withTransform({ rotate(leftArm, point(310f, 805f)) }) {
-                drawCircle(Color(0xFF292B2D).copy(alpha = opacity), 35f * imageScale, point(188f, 1025f))
-                clipPath(leftUpperArm) { region(0, 765, 340, 265) }
-            }
-            withTransform({ rotate(rightArm, point(795f, 805f)) }) {
-                drawCircle(Color(0xFF292B2D).copy(alpha = opacity), 35f * imageScale, point(917f, 1025f))
-                clipPath(rightUpperArm) { region(765, 765, 340, 265) }
-            }
-            region(290, 755, 525, 530)
-            withTransform({ rotate(leftArm, point(310f, 805f)) }) {
-                withTransform({ rotate(leftElbow, point(188f, 1025f)) }) {
-                    clipPath(leftForearm) { region(0, 995, 260, 375) }
+    Box(
+        modifier = modifier.size(280.dp).semantics {
+            contentDescription = "${companion.name} đang ${stateLabel(state)}"
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize().offset(y = bob.dp).graphicsLayer { alpha = opacity }) {
+            val scale = size.width / body.width
+            fun p(x: Float, y: Float) = Offset(x * scale, y * scale)
+            fun drawArm(x: Int, width: Int, angle: Float, pivotX: Float) {
+                withTransform({ rotate(angle, p(pivotX, 745f)) }) {
+                    drawImage(
+                        image = arms,
+                        srcOffset = IntOffset(x, 680),
+                        srcSize = IntSize(width, 390),
+                        dstOffset = IntOffset((x * scale).toInt(), (680 * scale).toInt()),
+                        dstSize = IntSize((width * scale).toInt(), (390 * scale).toInt()),
+                    )
                 }
             }
-            withTransform({ rotate(rightArm, point(795f, 805f)) }) {
-                withTransform({ rotate(rightElbow, point(917f, 1025f)) }) {
-                    clipPath(rightForearm) { region(845, 995, 260, 375) }
-                }
-            }
-            val jointShade = Brush.verticalGradient(
-                listOf(Color(0xFF5B5E61).copy(alpha = opacity), Color(0xFF242629).copy(alpha = opacity)),
-                startY = point(0f, 990f).y,
-                endY = point(0f, 1060f).y,
-            )
-            withTransform({ rotate(leftArm, point(310f, 805f)) }) {
-                drawOval(jointShade, topLeft = point(153f, 989f), size = Size(70f * imageScale, 72f * imageScale))
-            }
-            withTransform({ rotate(rightArm, point(795f, 805f)) }) {
-                drawOval(jointShade, topLeft = point(882f, 989f), size = Size(70f * imageScale, 72f * imageScale))
-            }
-            region(0, 0, sprite.width, 770)
+            drawArm(100, 340, leftArm, 350f)
+            drawArm(825, 340, rightArm, 910f)
+            drawImage(body, dstSize = IntSize(size.width.toInt(), size.height.toInt()))
 
-            drawRobotFace(::point, imageScale, eyeOpen * blink, gazeX, gazeY, mouth, state, emotion)
+            val color = expressionColor(visual.expression)
+            drawRobotFace(scale, visual.expression, color, blink, mouth)
+            drawRobotLights(scale, color, light * lightBeat)
         }
     }
 }
 
-private fun DrawScope.drawRobotFace(
-    point: (Float, Float) -> Offset,
-    scale: Float,
-    eyeOpen: Float,
-    gazeX: Float,
-    gazeY: Float,
-    mouth: Float,
-    state: ConnectionState,
-    emotion: RobotEmotion,
-) {
-    val cyan = when (emotion.emotion) {
-        "excited", "surprised", "proud" -> Color(0xFFFFD76A)
-        "sad" -> Color(0xFF91C9E8)
-        "strict", "displeased" -> Color(0xFFFFA96B)
-        else -> Color(0xFF20F3F5)
+private fun expressionColor(expression: AvatarExpression): Color = when (expression) {
+    AvatarExpression.HAPPY -> Color(0xFFFFDA70)
+    AvatarExpression.SAD -> Color(0xFF86C8F5)
+    AvatarExpression.STRICT -> Color(0xFFFFA36B)
+    AvatarExpression.THINKING -> Color(0xFFB8A7FF)
+    AvatarExpression.SLEEPY -> Color(0xFF669AB9)
+    AvatarExpression.NEUTRAL -> Color(0xFF1CF2EE)
+}
+
+private fun DrawScope.drawRobotLights(scale: Float, color: Color, energy: Float) {
+    fun glow(x: Float, y: Float, radius: Float) {
+        val center = Offset(x * scale, y * scale)
+        drawCircle(
+            brush = Brush.radialGradient(
+                0f to color.copy(alpha = 0.38f * energy),
+                0.4f to color.copy(alpha = 0.19f * energy),
+                1f to Color.Transparent,
+                center = center,
+                radius = radius * scale,
+            ),
+            radius = radius * scale,
+            center = center,
+        )
     }
-    // Repaint only the dark display interior so the printed eyes do not remain visible.
+    glow(330f, 355f, 90f)
+    glow(956f, 355f, 90f)
+    glow(645f, 805f, 115f)
+    drawCircle(color.copy(alpha = energy * 0.28f), 55f * scale, Offset(645f * scale, 805f * scale))
+}
+
+private fun DrawScope.drawRobotFace(
+    scale: Float,
+    expression: AvatarExpression,
+    color: Color,
+    blink: Float,
+    mouth: Float,
+) {
+    fun p(x: Float, y: Float) = Offset(x * scale, y * scale)
+    // Replace the printed features within the screen, retaining its bezel and glossy outer rim.
     drawRoundRect(
-        brush = Brush.verticalGradient(listOf(Color(0xFF34393D), Color(0xFF171B1E))),
-        topLeft = point(355f, 415f),
-        size = Size(395f * scale, 246f * scale),
-        cornerRadius = CornerRadius(38f * scale),
+        brush = Brush.verticalGradient(
+            listOf(Color(0xFF111319), Color(0xFF03070B)),
+            startY = 255f * scale,
+            endY = 505f * scale,
+        ),
+        topLeft = p(433f, 246f),
+        size = Size(427f * scale, 256f * scale),
+        cornerRadius = CornerRadius(68f * scale),
     )
-    for (eyeX in listOf(445f, 662f)) {
-        val center = point(eyeX + gazeX, 516f + gazeY)
-        if (eyeOpen < 0.16f) {
-            drawLine(cyan, center.copy(x = center.x - 29f * scale), center.copy(x = center.x + 29f * scale), 6f * scale)
+    val eyeY = if (expression == AvatarExpression.THINKING) 322f else 335f
+    val eyeHeight = when (expression) {
+        AvatarExpression.SLEEPY -> 0f
+        AvatarExpression.STRICT -> 12f * blink
+        AvatarExpression.SAD -> 24f * blink
+        AvatarExpression.HAPPY -> 38f * blink
+        else -> 35f * blink
+    }
+    for (x in listOf(535f, 755f)) {
+        if (expression == AvatarExpression.SLEEPY || blink < 0.16f) {
+            drawArc(
+                color,
+                startAngle = 20f,
+                sweepAngle = 140f,
+                useCenter = false,
+                topLeft = p(x - 34f, eyeY - 10f),
+                size = Size(68f * scale, 30f * scale),
+                style = Stroke(width = 7f * scale),
+            )
         } else {
             drawOval(
-                cyan.copy(alpha = 0.20f),
-                topLeft = Offset(center.x - 44f * scale, center.y - 44f * eyeOpen * scale),
-                size = Size(88f * scale, 88f * eyeOpen * scale),
+                color.copy(alpha = 0.22f),
+                topLeft = p(x - 46f, eyeY - eyeHeight - 10f),
+                size = Size(92f * scale, (eyeHeight * 2f + 20f) * scale),
             )
             drawOval(
-                cyan,
-                topLeft = Offset(center.x - 31f * scale, center.y - 31f * eyeOpen * scale),
-                size = Size(62f * scale, 62f * eyeOpen * scale),
+                color,
+                topLeft = p(x - 32f, eyeY - eyeHeight),
+                size = Size(64f * scale, eyeHeight * 2f * scale),
             )
         }
     }
-    if (state == ConnectionState.SPEAKING && mouth > 0.04f) {
-        drawRoundRect(
-            color = cyan,
-            topLeft = point(529f, 604f - mouth * 12f),
-            size = Size(52f * scale, (5f + mouth * 29f) * scale),
-            cornerRadius = CornerRadius(17f * scale),
+    if (expression == AvatarExpression.STRICT) {
+        drawLine(color, p(493f, 290f), p(560f, 310f), 6f * scale)
+        drawLine(color, p(730f, 310f), p(797f, 290f), 6f * scale)
+    }
+    when {
+        expression == AvatarExpression.SLEEPY -> drawLine(color.copy(alpha = 0.45f), p(620f, 435f), p(670f, 435f), 5f * scale)
+        mouth > 0.1f -> drawOval(
+            color,
+            topLeft = p(625f - mouth * 8f, 421f - mouth * 5f),
+            size = Size((40f + mouth * 16f) * scale, (12f + mouth * 46f) * scale),
         )
-    } else if (state != ConnectionState.SLEEPING) {
-        drawArc(
-            color = cyan.copy(alpha = 0.8f),
-            startAngle = 20f,
-            sweepAngle = 140f,
-            useCenter = false,
-            topLeft = point(522f, 586f),
-            size = Size(66f * scale, 37f * scale),
-            style = Stroke(width = 4f * scale),
+        expression == AvatarExpression.SAD -> drawArc(
+            color, 205f, 130f, false,
+            p(601f, 425f), Size(88f * scale, 47f * scale), style = Stroke(width = 7f * scale),
+        )
+        expression == AvatarExpression.STRICT -> drawLine(color, p(614f, 445f), p(676f, 445f), 7f * scale)
+        expression == AvatarExpression.THINKING -> drawCircle(color, 10f * scale, p(645f, 440f))
+        else -> drawArc(
+            color, 12f, 156f, false,
+            p(598f, 399f), Size(94f * scale, 65f * scale), style = Stroke(width = 8f * scale),
         )
     }
 }
