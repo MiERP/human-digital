@@ -152,6 +152,21 @@ Android hiện dùng **Silero VAD on-device** (`com.github.gkonovalov.android-va
 
 ---
 
+### Triển khai cập nhật lên VPS đang chạy
+
+Chỉ dùng khi `/opt/human-digital` đã là Git checkout của `MiERP/human-digital`, có `.env` riêng và container `backend` đang chạy với volume `/app/data`:
+
+```bash
+cd /opt/human-digital
+old_commit=$(git rev-parse HEAD)
+git pull --ff-only origin main
+PREVIOUS_COMMIT="$old_commit" bash deploy_vps.sh
+```
+
+Script chỉ rebuild service `backend` (`--no-deps`), sao lưu dữ liệu vào `/opt/backups/human-digital/`, rồi kiểm tra `/health` và `/api/companions`. Nó không sửa Nginx, firewall, `.env` hay service havsAI. Nếu điều kiện ban đầu không đúng, script dừng; **không chạy installer cũ hoặc `docker compose down` để khắc phục**. Khi cần quay lại mã nguồn trước đó, lấy SHA từ `previous-commit.txt` trong thư mục sao lưu và chỉ rebuild `backend` ở SHA đó. Khôi phục dữ liệu cần đánh giá riêng vì bản mới có thể đã ghi dữ liệu sau lúc sao lưu.
+
+---
+
 ### 2. Cài đặt & Chạy trên Android
 
 1. Mở thư mục `android/` bằng **Android Studio**.
