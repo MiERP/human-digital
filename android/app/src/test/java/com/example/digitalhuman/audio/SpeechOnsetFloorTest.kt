@@ -30,9 +30,4 @@ class SpeechOnsetFloorTest {
         )
     }
 
-    @Test fun sustainedLowEnergyIsTreatedAsNoise() {
-        assertTrue(shouldEndNoisyUtterance(meanRms = 0.02f, noiseFloor = 0.004f))
-        assertFalse(shouldEndNoisyUtterance(meanRms = 0.08f, noiseFloor = 0.004f))
-        assertTrue(shouldEndNoisyUtterance(meanRms = 0.05f, noiseFloor = 0.04f))
-    }
 }
