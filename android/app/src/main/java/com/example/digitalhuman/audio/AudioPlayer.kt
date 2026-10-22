@@ -45,8 +45,9 @@ class AudioPlayer(
         // Khuếch đại âm lượng phát lại: 1.8x để giọng Doraemon to rõ nhưng không bị méo tiếng.
         private const val VOLUME_GAIN = 1.8f
 
-        // Nếu mạng dồn quá nhiều audio, hàng đợi phát lại sẽ nghe như lặp nội dung cũ.
-        private const val MAX_PENDING_BYTES = BYTES_PER_SECOND * 8
+        // Đủ chỗ cho một câu chuyện dài 1-2 phút mà không cắt ngang.
+        // Trước đây 8 giây làm Luna bị ngắt giữa truyện khi model trả lời dài.
+        private const val MAX_PENDING_BYTES = BYTES_PER_SECOND * 120
 
         // Sau khi bé ngắt lời, bỏ các chunk của lượt cũ còn đang bay tới.
         // Không có cửa sổ này, loa sẽ phát tiếp nửa câu vừa bị ngắt.

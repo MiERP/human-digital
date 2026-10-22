@@ -10,12 +10,13 @@ class SpeechOnsetFloorTest {
         assertFalse(0.000f > speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.004f))
     }
 
-    @Test fun quietSpeechStillOpensATurn() {
-        assertTrue(0.02f > speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.004f))
+    @Test fun normalSpeechStillOpensATurn() {
+        assertTrue(0.05f > speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.004f))
     }
 
     @Test fun veryQuietRoomNoiseDoesNotOpenATurn() {
         assertFalse(0.012f > speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.004f))
+        assertFalse(0.024f > speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.004f))
     }
 
     @Test fun bargeInKeepsTheEchoThreshold() {
@@ -27,5 +28,11 @@ class SpeechOnsetFloorTest {
             speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.05f) >
                 speechOnsetFloor(playing = false, echoThreshold = 0.06f, noiseFloor = 0.005f)
         )
+    }
+
+    @Test fun sustainedLowEnergyIsTreatedAsNoise() {
+        assertTrue(shouldEndNoisyUtterance(meanRms = 0.02f, noiseFloor = 0.004f))
+        assertFalse(shouldEndNoisyUtterance(meanRms = 0.08f, noiseFloor = 0.004f))
+        assertTrue(shouldEndNoisyUtterance(meanRms = 0.05f, noiseFloor = 0.04f))
     }
 }

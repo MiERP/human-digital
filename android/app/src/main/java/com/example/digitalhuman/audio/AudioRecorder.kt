@@ -60,6 +60,10 @@ class AudioRecorder(
         // để một lỗi phía server không khóa mic vĩnh viễn.
         private const val ASSISTANT_BUSY_TIMEOUT_MS = 12_000L
 
+        // Cửa sổ năng lượng ~1 giây để phát hiện "VAD nói speech nhưng thực ra
+        // chỉ là tiếng ồn nền" và đóng lượt thay vì stream nhiễu hàng chục giây.
+        private const val VOICE_ENERGY_WINDOW_FRAMES = 32
+
         // Ngưỡng RMS tối thiểu để coi là barge-in thật khi loa đang phát.
         // Nâng lên 0.10 vì tiếng loa Luna lọt vào mic (dù có AEC) từng làm
         // cô ấy tự ngắt lời mình nhiều lần trong một lượt.
@@ -181,6 +185,7 @@ class AudioRecorder(
             var loudOnsetFrames = 0
             var utteranceFrames = 0
             var muteOnsetUntil = 0L
+            val energyWindow = ArrayDeque<Float>(VOICE_ENERGY_WINDOW_FRAMES)
             var frameOffset = 0
             var diagnosticStartedAt = System.currentTimeMillis()
             var diagnosticPeakRms = 0f
@@ -308,6 +313,7 @@ class AudioRecorder(
                             silenceFrames = 0
                             loudOnsetFrames = 0
                             utteranceFrames = 0
+                            energyWindow.clear()
                             // Bé đã giành lượt: mở lại VAD bình thường.
                             isAssistantTurnActive = false
 
@@ -324,10 +330,33 @@ class AudioRecorder(
                         speechOnsetFrames = 0
                         loudOnsetFrames = 0
                         onAudioChunk(frameData)
-                        // VAD có thể giữ "speech" mãi trong phòng ồn. Chốt lượt
-                        // sau ~20 giây để Gemini luôn có ranh giới lượt.
+                        // VAD có thể giữ "speech" mãi trong phòng ồn. Nếu năng
+                        // lượng trung bình ~1 giây quá thấp thì đây là nhiễu,
+                        // không phải giọng bé: đóng lượt ngay.
+                        energyWindow.addLast(cleanRms)
+                        while (energyWindow.size > VOICE_ENERGY_WINDOW_FRAMES) {
+                            energyWindow.removeFirst()
+                        }
+                        val noiseTurn = energyWindow.size >= VOICE_ENERGY_WINDOW_FRAMES &&
+                            shouldEndNoisyUtterance(
+                                meanRms = energyWindow.average().toFloat(),
+                                noiseFloor = noiseCleaner.noiseFloorRms,
+                            )
                         utteranceFrames++
-                        if (shouldForceEndUtterance(utteranceFrames)) {
+                        if (noiseTurn) {
+                            Log.i("AudioRecorder", "Low-energy speech; closing noise turn")
+                            userSpeaking = false
+                            silenceFrames = 0
+                            speechOnsetFrames = 0
+                            loudOnsetFrames = 0
+                            utteranceFrames = 0
+                            energyWindow.clear()
+                            preRoll.clear()
+                            muteOnsetUntil = now + FORCE_END_QUIET_MS
+                            isAssistantTurnActive = true
+                            assistantTurnStartedAt = now
+                            onSpeechEnded()
+                        } else if (shouldForceEndUtterance(utteranceFrames)) {
                             Log.i("AudioRecorder", "Max utterance reached; closing turn to avoid VAD latch")
                             userSpeaking = false
                             silenceFrames = 0
@@ -354,6 +383,7 @@ class AudioRecorder(
                         speechOnsetFrames = 0
                         loudOnsetFrames = 0
                         utteranceFrames = 0
+                        energyWindow.clear()
                         isAssistantTurnActive = true
                         assistantTurnStartedAt = now
                         onSpeechEnded()
@@ -461,7 +491,15 @@ internal fun shouldForceEndUtterance(utteranceFrames: Int): Boolean =
 
 // Sàn năng lượng cho onset: chặn VAD "latch" speech từ frame gần như im lặng
 // (đã quan sát onset RMS=0.000 làm app kẹt lượt vĩnh viễn).
-private const val ONSET_MIN_RMS = 0.015f
+private const val ONSET_MIN_RMS = 0.03f
+
+/**
+ * Nhiễu nền có thể làm Silero trả "speech" liên tục. Nếu năng lượng trung bình
+ * của cửa sổ ~1 giây quá thấp thì coi đó là nhiễu và đóng lượt thay vì stream
+ * hàng chục giây tiếng ồn lên Gemini.
+ */
+internal fun shouldEndNoisyUtterance(meanRms: Float, noiseFloor: Float): Boolean =
+    meanRms < maxOf(0.03f, noiseFloor * 2.0f)
 
 /**
  * Ngưỡng RMS tối thiểu để bắt đầu một lượt nói.
