@@ -96,11 +96,9 @@ class EmotionEngine:
         }
 
     def start_session(self, child_id: str) -> Dict:
-        """Khởi động phiên trò chuyện mới — Doraemon luôn tràn đầy năng lượng tươi vui."""
-        s = self._fresh()
-        self._save(child_id, s)
-        state = self._effective(s)
-        logger.info(f"Started new session for child [{child_id}] with fresh energetic emotion: {state}")
+        """Tiếp nối cảm xúc đã lưu, sau khi áp dụng hồi phục theo thời gian."""
+        state = self.get_state(child_id)
+        logger.info(f"Started new session for child [{child_id}] with emotion: {state}")
         return state
 
     def _load(self, child_id: str) -> Dict:
