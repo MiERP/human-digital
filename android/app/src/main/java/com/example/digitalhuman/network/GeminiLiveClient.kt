@@ -54,6 +54,7 @@ class GeminiLiveClient(
     private val onStateChanged: (ConnectionState) -> Unit,
     private val onInterrupted: () -> Unit,
     private val onEmotionChanged: ((RobotEmotion) -> Unit)? = null,
+    private val onInputRecognized: (() -> Unit)? = null,
     private val onSessionEnded: (() -> Unit)? = null,
     private val onTurnComplete: (() -> Unit)? = null,
     private val onClarificationRequest: ((question: String, options: List<String>) -> Unit)? = null,
@@ -239,7 +240,9 @@ class GeminiLiveClient(
                             "input_transcription", "output_transcription" -> {
                                 val text = json.optString("text", "")
                                 if (text.isNotBlank()) {
-                                    Log.d(TAG, "Transcription: $text")
+                                    if (json.getString("event") == "input_transcription") {
+                                        onInputRecognized?.invoke()
+                                    }
                                 }
                             }
                             "clarification_request" -> {

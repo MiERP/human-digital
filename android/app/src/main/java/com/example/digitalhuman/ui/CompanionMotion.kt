@@ -24,11 +24,11 @@ internal fun companionVisualState(
     val phase = if (gesturePhase.isFinite()) gesturePhase.coerceIn(0f, 1f) else 0f
     val expression = when {
         state == ConnectionState.SLEEPING -> AvatarExpression.SLEEPY
-        emotion.energy == "sleepy" || emotion.energy == "drowsy" || emotion.energy == "tired" -> AvatarExpression.SLEEPY
         emotion.emotion == "happy" || emotion.emotion == "excited" || emotion.emotion == "proud" || emotion.emotion == "surprised" -> AvatarExpression.HAPPY
         emotion.emotion == "sad" -> AvatarExpression.SAD
         emotion.emotion == "strict" || emotion.emotion == "displeased" || emotion.emotion == "angry" -> AvatarExpression.STRICT
         state == ConnectionState.THINKING -> AvatarExpression.THINKING
+        state != ConnectionState.SPEAKING && (emotion.energy == "sleepy" || emotion.energy == "drowsy") -> AvatarExpression.SLEEPY
         else -> AvatarExpression.NEUTRAL
     }
     if (state == ConnectionState.SLEEPING) {

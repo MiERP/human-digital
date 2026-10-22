@@ -16,6 +16,14 @@ class CompanionMotionTest {
         assertEquals(AvatarExpression.SLEEPY, companionVisualState(ConnectionState.LISTENING, RobotEmotion(energy = "drowsy"), 0f, 0f).expression)
     }
 
+    @Test fun tiredEnergyKeepsEyesOpenDuringConversation() {
+        val tired = RobotEmotion(energy = "tired")
+        assertEquals(AvatarExpression.NEUTRAL, companionVisualState(ConnectionState.LISTENING, tired, 0f, 0f).expression)
+        assertEquals(AvatarExpression.NEUTRAL, companionVisualState(ConnectionState.SPEAKING, tired, 0.2f, 0f).expression)
+        assertEquals(AvatarExpression.NEUTRAL, companionVisualState(ConnectionState.SPEAKING, RobotEmotion(energy = "sleepy"), 0.2f, 0f).expression)
+        assertEquals(AvatarExpression.SLEEPY, companionVisualState(ConnectionState.SLEEPING, tired, 0f, 0f).expression)
+    }
+
     @Test fun speakingAlternatesArmsAndLightsFollowSafeAudioLevel() {
         val first = companionVisualState(ConnectionState.SPEAKING, RobotEmotion(), 0.2f, 0f)
         val second = companionVisualState(ConnectionState.SPEAKING, RobotEmotion(), 0.2f, 1f)

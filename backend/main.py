@@ -179,9 +179,9 @@ VAD_PREFIX_PADDING_MS = int(os.getenv("VAD_PREFIX_PADDING_MS", "200"))
 #                       audio_stream_end để finalize tức thì (ít trễ).
 #   manual            = tắt hoàn toàn server VAD; client gửi activity_start/end.
 #   server            = server làm tất cả (không cần tín hiệu từ client).
-VAD_MODE = os.getenv("VAD_MODE", "hybrid").lower()
+VAD_MODE = os.getenv("VAD_MODE", "manual").lower()
 if VAD_MODE not in ("hybrid", "manual", "server"):
-    VAD_MODE = "hybrid"
+    VAD_MODE = "manual"
 
 # Affective dialog: model native-audio phản hồi theo sắc thái giọng điệu của bé.
 # Có thể gây Error 1007 khi trộn tool call ở vài phiên bản → tắt nhanh được bằng env.
@@ -380,6 +380,20 @@ def build_proactive_nudge(profile: dict, unanswered_count: int) -> str:
         "cụ thể. Tuyệt đối không chuyển thành bài học, câu đố, từ vựng hay lời nhắc học. "
         f"Không lặp lại điều bạn vừa nói trước đó.{detail}]"
     )
+
+
+def proactive_nudge_due(state: dict, now: float) -> bool:
+    """Only open a new topic after the child's turn has actually been answered."""
+    if state["user_turn_open"] or state["reply_pending"]:
+        return False
+    if state["nudges_since_user"] >= PROACTIVE_MAX_UNANSWERED:
+        return False
+    if state["nudges_total"] >= PROACTIVE_MAX_PER_SESSION:
+        return False
+    required_idle = PROACTIVE_IDLE_SECONDS * (1 + state["nudges_since_user"])
+    if state["bot_asked_question"]:
+        required_idle *= 2
+    return now - max(state["last_user_at"], state["last_bot_at"]) >= required_idle
 
 
 def _greeting_seed() -> str:
@@ -1251,10 +1265,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 "last_user_at": time.time(),
                 "last_bot_at": time.time(),
                 "user_turn_open": False,
+                "reply_pending": False,
                 "nudges_since_user": 0,
                 "nudges_total": 0,
                 "last_bot_text": "",
                 "bot_asked_question": False,
+                "turn_audio_bytes": 0,
             }
             last_stream_end_at = 0.0
 
@@ -1269,6 +1285,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             break
                         if "bytes" in message and message["bytes"]:
                             audio_bytes = message["bytes"]
+                            conversation_state["turn_audio_bytes"] += len(audio_bytes)
                             # Bé đang nói: nhịp trò chuyện đang do bé dẫn.
                             conversation_state["last_user_at"] = time.time()
                             conversation_state["user_turn_open"] = True
@@ -1307,20 +1324,29 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 # manual (server auto-VAD đã tắt hẳn).
                                 if VAD_MODE == "manual":
                                     try:
+                                        conversation_state["last_user_at"] = time.time()
+                                        conversation_state["user_turn_open"] = True
+                                        conversation_state["turn_audio_bytes"] = 0
                                         await session.send_realtime_input(
                                             activity_start=types.ActivityStart()
                                         )
-                                        logger.debug("Forwarded activity_start to Gemini.")
+                                        logger.info("User turn started (activity_start forwarded).")
                                     except Exception as e:
                                         logger.warning(f"Failed to send activity_start: {e}")
                             elif action == "activity_end":
                                 # Client VAD báo user ngừng nói (chế độ manual).
                                 if VAD_MODE == "manual":
                                     try:
+                                        conversation_state["last_user_at"] = time.time()
+                                        conversation_state["user_turn_open"] = False
+                                        conversation_state["reply_pending"] = True
                                         await session.send_realtime_input(
                                             activity_end=types.ActivityEnd()
                                         )
-                                        logger.info("User turn ended (activity_end forwarded).")
+                                        logger.info(
+                                            "User turn ended (activity_end forwarded, audio_ms=%d).",
+                                            conversation_state["turn_audio_bytes"] * 1000 // 32000,
+                                        )
                                     except Exception as e:
                                         logger.warning(f"Failed to send activity_end: {e}")
                             elif action == "audio_stream_end":
@@ -1329,6 +1355,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 now_ts = time.time()
                                 conversation_state["last_user_at"] = now_ts
                                 conversation_state["user_turn_open"] = False
+                                if VAD_MODE != "manual":
+                                    conversation_state["reply_pending"] = True
                                 conversation_state["nudges_since_user"] = 0
                                 # Client có thể gửi trùng khi VAD tách một câu thành
                                 # nhiều đoạn ngắn; finalize hai lần sẽ sinh hai câu trả lời.
@@ -1714,6 +1742,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     logger.info("Gemini turn_complete received.")
                                     conversation_state["last_bot_at"] = time.time()
                                     conversation_state["user_turn_open"] = False
+                                    conversation_state["reply_pending"] = False
                                     # Nếu robot vừa hỏi bé, cho bé thời gian suy nghĩ
                                     # lâu hơn trước khi chủ động chen vào.
                                     conversation_state["bot_asked_question"] = (
@@ -1759,10 +1788,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                                 if server_content.waiting_for_input:
                                     logger.info("Gemini waiting_for_input event received.")
+                                    conversation_state["reply_pending"] = False
                                     await websocket.send_text(json.dumps({"event": "waiting_for_input"}))
 
                                 if ENABLE_TRANSCRIPTION:
                                     if server_content.input_transcription and server_content.input_transcription.text:
+                                        logger.info("Gemini recognized user speech (chars=%d).", len(server_content.input_transcription.text))
                                         await websocket.send_text(json.dumps({
                                             "event": "input_transcription",
                                             "text": server_content.input_transcription.text,
@@ -1801,24 +1832,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             if pending_session_summary:
                                 return
                             now_ts = time.time()
-                            idle = now_ts - max(
-                                conversation_state["last_user_at"],
-                                conversation_state["last_bot_at"],
-                            )
-                            if conversation_state["user_turn_open"]:
+                            if not proactive_nudge_due(conversation_state, now_ts):
                                 continue
-                            if conversation_state["nudges_since_user"] >= PROACTIVE_MAX_UNANSWERED:
-                                continue
-                            if conversation_state["nudges_total"] >= PROACTIVE_MAX_PER_SESSION:
-                                return
-                            # Bé không đáp thì khoảng chờ tăng dần: 15s, 30s, 45s.
-                            required_idle = PROACTIVE_IDLE_SECONDS * (
-                                1 + conversation_state["nudges_since_user"]
-                            )
-                            if conversation_state["bot_asked_question"]:
-                                required_idle *= 2
-                            if idle < required_idle:
-                                continue
+                            idle = now_ts - max(conversation_state["last_user_at"], conversation_state["last_bot_at"])
                             nudge = build_proactive_nudge(
                                 profile, conversation_state["nudges_since_user"]
                             )

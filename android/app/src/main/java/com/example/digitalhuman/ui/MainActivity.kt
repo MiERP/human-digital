@@ -843,6 +843,13 @@ fun TutorScreen(
                     robotEmotion = emotion
                 }
             },
+            onInputRecognized = {
+                runOnMain {
+                    if (isSessionActive && connectionState == ConnectionState.LISTENING && !audioPlayer.isPlayingOrPending) {
+                        connectionState = ConnectionState.THINKING
+                    }
+                }
+            },
             onSessionEnded = {
                 runOnMain {
                     audioRecorderRef?.stopRecording()
@@ -992,8 +999,8 @@ fun TutorScreen(
                 }
             },
             onSpeechStarted = {
-                // Chế độ hybrid: server tự phát hiện bắt đầu lượt, nên không cần gửi
-                // activity_start. Ở đây chỉ cần xử lý barge-in cục bộ cho mượt.
+                // Manual VAD gửi ranh giới ngay trước pre-roll; hybrid backend cũ bỏ qua.
+                client.notifyActivityStart()
                 runOnMain {
                     if (connectionState == ConnectionState.SPEAKING || audioPlayer.isPlayingOrPending) {
                         // Barge-in: bé nói xen vào khi Doraemon đang phát -> dừng phát tức thì
@@ -1008,11 +1015,12 @@ fun TutorScreen(
                 }
             },
             onSpeechEnded = {
-                // Báo hết lượt nói để Gemini finalize NGAY (giảm lag chờ silence).
+                // Manual VAD chốt lượt; hybrid backend cũ vẫn dùng audio_stream_end.
+                client.notifyActivityEnd()
                 client.notifyAudioStreamEnd()
                 runOnMain {
                     if (connectionState != ConnectionState.SLEEPING) {
-                        connectionState = ConnectionState.THINKING
+                        connectionState = ConnectionState.LISTENING
                         // Giữ mic mở để bé vẫn có thể ngắt lời khi Doraemon trả lời.
                         audioRecorderRef?.isMicListeningEnabled = true
                     }

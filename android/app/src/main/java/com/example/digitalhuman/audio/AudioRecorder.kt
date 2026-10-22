@@ -52,17 +52,6 @@ class AudioRecorder(
         // Ngắn hơn trước (640ms) để giảm lag phản hồi; Silero hangover đã set 300ms.
         private const val SILENCE_FRAMES_THRESHOLD = 11
 
-        // Chốt "bé bắt đầu nói" trong điều kiện bình thường: 2 frames (~64ms) để nhận diện nhanh.
-        private const val SPEECH_ONSET_FRAMES_NORMAL = 2
-
-        // Khi loa ĐANG phát: cần onset dài (~320ms) + to hơn ngưỡng echo mới coi là
-        // bé ngắt lời thật (barge-in). Tránh tiếng vang/tiếng ồn kích hoạt ngắt lời giả.
-        private const val BARGE_IN_ONSET_FRAMES = 10
-
-        // Trong 800ms ngay sau khi Doraemon phát âm thanh, cần 4 frames (~128ms) để
-        // triệt tiêu rủi ro tiếng vang phòng kích hoạt giả mạo ngắt lời.
-        private const val SPEECH_ONSET_FRAMES_POST_PLAYBACK = 4
-
         // Ngưỡng RMS tối thiểu để coi là barge-in thật khi loa đang phát.
         private const val MIN_BARGE_RMS = 0.06f
 
@@ -95,9 +84,6 @@ class AudioRecorder(
 
     @Volatile
     private var playbackGraceUntil = 0L
-
-    @Volatile
-    private var lastPlaybackChunkTime = 0L
 
     @SuppressLint("MissingPermission")
     fun startRecording(scope: CoroutineScope) {
@@ -143,7 +129,7 @@ class AudioRecorder(
                 .setContext(context)
                 .setSampleRate(SampleRate.SAMPLE_RATE_16K)
                 .setFrameSize(FrameSize.FRAME_SIZE_512)
-                .setMode(Mode.AGGRESSIVE)
+                .setMode(Mode.NORMAL)
                 .setSpeechDurationMs(100)
                 .setSilenceDurationMs(300)
                 .build()
@@ -217,13 +203,8 @@ class AudioRecorder(
                         // Debounce thích ứng:
                         // - Loa đang phát (barge-in): cần onset dài (~320ms) VÀ to hơn
                         //   ngưỡng echo mới coi là bé ngắt lời thật.
-                        // - Vừa dứt lời (<800ms): cần ~128ms chống vang phòng.
-                        // - Bình thường: ~64ms để phản hồi nhanh.
-                        val requiredOnset = when {
-                            playing -> BARGE_IN_ONSET_FRAMES
-                            now - lastPlaybackChunkTime < 800L -> SPEECH_ONSET_FRAMES_POST_PLAYBACK
-                            else -> SPEECH_ONSET_FRAMES_NORMAL
-                        }
+                        // - Khi loa đã dứt: chỉ cần ~64ms để không bỏ câu đáp ngắn.
+                        val requiredOnset = requiredSpeechOnsetFrames(playing)
                         val loudEnough = !playing || cleanRms > echoThreshold
 
                         if (speechOnsetFrames >= requiredOnset && loudEnough) {
@@ -275,7 +256,6 @@ class AudioRecorder(
     fun onPlaybackChunkReceived() {
         isPlaybackActive = true
         val now = System.currentTimeMillis()
-        lastPlaybackChunkTime = now
         playbackGraceUntil = now + PLAYBACK_GRACE_MS
     }
 
@@ -290,13 +270,11 @@ class AudioRecorder(
 
     /**
      * Gọi khi AudioPlayer thực sự kết thúc phát toàn bộ âm thanh qua loa.
-     * Khóa micro thêm PLAYBACK_GRACE_MS (450ms) tính từ thời điểm loa ngừng rung
-     * để triệt tiêu 100% tiếng vang loa lọt vào mic.
+     * Giữ cổng chống vọng thêm PLAYBACK_GRACE_MS (150ms) sau khi loa dừng.
      */
     fun onPlaybackFinished() {
         isPlaybackActive = false
         val now = System.currentTimeMillis()
-        lastPlaybackChunkTime = now
         playbackGraceUntil = now + PLAYBACK_GRACE_MS
     }
 
@@ -335,3 +313,5 @@ class AudioRecorder(
         return sqrt(sum / shortCount).toFloat()
     }
 }
+
+internal fun requiredSpeechOnsetFrames(playing: Boolean): Int = if (playing) 10 else 2

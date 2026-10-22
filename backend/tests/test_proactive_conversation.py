@@ -8,6 +8,20 @@ import main
 
 
 class TestProactiveConversation(unittest.TestCase):
+    def test_pending_child_reply_blocks_proactive_nudge(self):
+        state = {
+            "last_user_at": 100.0,
+            "last_bot_at": 90.0,
+            "user_turn_open": False,
+            "reply_pending": True,
+            "nudges_since_user": 0,
+            "nudges_total": 0,
+            "bot_asked_question": False,
+        }
+        self.assertFalse(main.proactive_nudge_due(state, now=120.0))
+        state["reply_pending"] = False
+        self.assertTrue(main.proactive_nudge_due(state, now=120.0))
+
     def test_nudge_varies_and_stays_out_of_lesson_mode(self):
         profile = {"favorite_animal": "mèo", "hobbies": ["vẽ"]}
         seen = set()
