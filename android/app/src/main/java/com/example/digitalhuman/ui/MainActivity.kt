@@ -66,6 +66,7 @@ import androidx.core.content.ContextCompat
 import com.example.digitalhuman.audio.AudioPlayer
 import com.example.digitalhuman.R
 import com.example.digitalhuman.audio.AudioRecorder
+import com.example.digitalhuman.audio.OpeningGreetingGate
 import com.example.digitalhuman.network.ConnectionState
 import com.example.digitalhuman.network.GeminiLiveClient
 import com.example.digitalhuman.network.ProfileApi
@@ -661,6 +662,7 @@ fun TutorScreen(
     var resetPin by remember { mutableStateOf("") }
 
     var audioRecorderRef by remember { mutableStateOf<AudioRecorder?>(null) }
+    val openingGreetingGate = remember { OpeningGreetingGate() }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     // Helper an toàn đảm bảo mọi thay đổi Compose State đều diễn ra trên Main (UI) Thread
@@ -676,6 +678,7 @@ fun TutorScreen(
         if (!sessionEndPending) return
         sessionEndPending = false
         isSessionActive = false
+        openingGreetingGate.stopSession()
         connectionState = ConnectionState.SLEEPING
         audioRecorderRef?.isMicListeningEnabled = false
         sleepJob?.cancel()
@@ -731,8 +734,10 @@ fun TutorScreen(
             },
             onPlaybackStateChanged = { isPlaying ->
                 if (isPlaying) {
+                    openingGreetingGate.onPlaybackStarted()
                     audioRecorderRef?.isPlaybackActive = true
                 } else {
+                    openingGreetingGate.onPlaybackFinished()
                     audioRecorderRef?.onPlaybackFinished()
                 }
                 runOnMain {
@@ -740,14 +745,14 @@ fun TutorScreen(
                         if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                             connectionState = ConnectionState.SPEAKING
                             // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
-                            audioRecorderRef?.isMicListeningEnabled = true
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                         }
                     } else {
                         if (sessionEndPending) {
                             finishSessionAfterPlayback()
                         } else if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                             connectionState = ConnectionState.LISTENING
-                            audioRecorderRef?.isMicListeningEnabled = true
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                         }
                     }
                 }
@@ -797,7 +802,7 @@ fun TutorScreen(
                 runOnMain {
                     connectionState = ConnectionState.SPEAKING
                     // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
-                    audioRecorderRef?.isMicListeningEnabled = true
+                    audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                 }
             },
             onStateChanged = { newState ->
@@ -805,7 +810,7 @@ fun TutorScreen(
                     when (newState) {
                         ConnectionState.CONNECTED -> {
                             connectionState = ConnectionState.LISTENING
-                            audioRecorderRef?.isMicListeningEnabled = true
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                         }
                         ConnectionState.SLEEPING -> {
                             audioRecorderRef?.isMicListeningEnabled = false
@@ -816,18 +821,19 @@ fun TutorScreen(
                         ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
                             connectionState = newState
                             audioRecorderRef?.isMicListeningEnabled = false
+                            if (isSessionActive) openingGreetingGate.startSession()
                         }
                         ConnectionState.LISTENING -> {
                             if (!audioPlayer.isPlayingOrPending && isSessionActive && connectionState != ConnectionState.SLEEPING) {
                                 connectionState = ConnectionState.LISTENING
-                                audioRecorderRef?.isMicListeningEnabled = true
+                                audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                             }
                         }
                         ConnectionState.SPEAKING -> {
                             if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                                 connectionState = ConnectionState.SPEAKING
                                 // Giữ mic mở để hỗ trợ ngắt lời (barge-in).
-                                audioRecorderRef?.isMicListeningEnabled = true
+                                audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                             }
                         }
                         else -> Unit
@@ -840,7 +846,7 @@ fun TutorScreen(
                         audioPlayer.beginInterruption()
                         connectionState = ConnectionState.LISTENING
                     }
-                    audioRecorderRef?.isMicListeningEnabled = true
+                    audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                 }
             },
             onEmotionChanged = { emotion ->
@@ -866,6 +872,12 @@ fun TutorScreen(
             },
             onTurnComplete = {
                 runOnMain {
+                    if (!audioPlayer.isPlayingOrPending) {
+                        openingGreetingGate.onTurnCompleteWithoutAudio()
+                        if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
+                        }
+                    }
                     audioPlayer.notifyTurnComplete()
                 }
             },
@@ -1014,7 +1026,7 @@ fun TutorScreen(
                     }
                     if (connectionState != ConnectionState.SLEEPING) {
                         connectionState = ConnectionState.LISTENING
-                        audioRecorderRef?.isMicListeningEnabled = true
+                        audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                     }
                 }
             },
@@ -1026,7 +1038,7 @@ fun TutorScreen(
                     if (connectionState != ConnectionState.SLEEPING) {
                         connectionState = ConnectionState.LISTENING
                         // Giữ mic mở để bé vẫn có thể ngắt lời khi Doraemon trả lời.
-                        audioRecorderRef?.isMicListeningEnabled = true
+                        audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                     }
                 }
             }
@@ -1037,9 +1049,10 @@ fun TutorScreen(
         sessionEndPending = false
         isSessionActive = true
         interruptionGate.reset()
+        openingGreetingGate.startSession()
         setSpeakerphoneRouting(true)
         val generation = audioSessionLifecycle.begin()
-        audioRecorder.isMicListeningEnabled = true
+        audioRecorder.isMicListeningEnabled = openingGreetingGate.allowMic
         // AudioTrack + model VAD Silero được khởi tạo trên IO: trước đây chúng
         // chạy trên main thread nên lần bấm đầu tiên bị khựng UI.
         scope.launch(Dispatchers.IO) {
@@ -1063,6 +1076,7 @@ fun TutorScreen(
         val generation = audioSessionLifecycle.end()
         sessionEndPending = false
         isSessionActive = false
+        openingGreetingGate.stopSession()
         isCameraActive = false
         audioRecorder.isMicListeningEnabled = false
         scope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {

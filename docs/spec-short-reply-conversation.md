@@ -25,6 +25,7 @@ Luna phải nghe được câu đáp ngắn sau lời khơi chuyện và chờ x
 4. Năng lượng `tired` không làm Luna nhắm mắt khi nghe/nói; trạng thái ngủ thực sự vẫn có mắt nhắm.
 5. Nhãn cảm xúc từ camera không tự tạo lượt Gemini khi bé im lặng; camera vẫn có thể cập nhật trạng thái tại thiết bị.
 6. Unit test Android/backend, build APK và kiểm tra trạng thái mắt/log trên điện thoại đều đạt. Kết quả nghe hiểu câu ngắn cần người dùng nói thật để xác nhận.
+7. Trong lời chào mở đầu, mic chưa nhận lượt nói cho đến khi âm thanh chào phát xong; nếu lượt chào không có âm thanh, `turn_complete` mở mic để tránh kẹt. Các lượt sau vẫn cho phép ngắt lời.
 
 ## Boundaries
 
