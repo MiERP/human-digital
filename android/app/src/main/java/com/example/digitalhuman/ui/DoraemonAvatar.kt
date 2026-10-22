@@ -1,19 +1,20 @@
 package com.example.digitalhuman.ui
 
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -22,15 +23,10 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntOffset
@@ -40,200 +36,139 @@ import com.example.digitalhuman.network.CompanionInfo
 import com.example.digitalhuman.network.ConnectionState
 import com.example.digitalhuman.network.RobotEmotion
 
-/**
- * Avatar nhân vật đồng hành 2D hoạt hình (Chuẩn tỷ lệ Fujiko F. Fujio).
- * - Hiển thị bộ tạo hình 2D sắc nét chuẩn anime theo từng trạng thái và cảm xúc.
- * - Bản sắc nhân vật (bảng màu) quyết định tông màu: bé trai (xanh/lục) hoặc bé gái (hồng/tím).
- * - Hiệu ứng chuyển cảnh Crossfade mượt mà khi đổi cảm xúc / trạng thái.
- * - Lơ lửng bồng bềnh tự nhiên (Floating 60 FPS).
- * - Hào quang tỏa sáng (Aura Glow) phản hồi theo nhịp đàm thoại.
- * - Khẩu hình Lip-sync chuyển động trực tiếp theo biên độ âm thanh Gemini Live.
- */
+/** The same Robo illustration responds to listening, thinking and live speech. */
 @Composable
 fun CompanionAvatar(
     state: ConnectionState,
-    amplitude: Float, // 0.0f -> 1.0f
+    amplitude: Float,
     emotion: RobotEmotion = RobotEmotion(),
     companion: CompanionInfo = CompanionInfo(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
-    val isSleeping = state == ConnectionState.SLEEPING
-    val isSpeaking = state == ConnectionState.SPEAKING || amplitude > 0.05f
-    val infiniteTransition = rememberInfiniteTransition(label = "companion_anim")
-
-    // 1. Hiệu ứng lơ lửng bồng bềnh
-    val floatOffset by infiniteTransition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(if (isSleeping) 2800 else 2000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "floating"
+    val motion = companionMotion(state, amplitude)
+    val tilt by animateFloatAsState(motion.tiltDegrees, tween(260), label = "robo_tilt")
+    val scale by animateFloatAsState(
+        motion.scale,
+        tween(if (state == ConnectionState.SPEAKING) 85 else 260),
+        label = "robo_scale",
+    )
+    val talk by animateFloatAsState(motion.talkLevel, tween(75), label = "robo_talk")
+    val opacity by animateFloatAsState(motion.opacity, tween(350), label = "robo_opacity")
+    val infinite = rememberInfiniteTransition(label = "robo_idle")
+    val bob by infinite.animateFloat(
+        initialValue = -6f,
+        targetValue = 6f,
+        animationSpec = infiniteRepeatable(tween(2100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "robo_bob",
+    )
+    val halo by infinite.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(tween(1300, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "robo_halo",
     )
 
-    // 2. Hiệu ứng nhấp nháy hào quang (Aura Pulse)
-    val auraPulse by infiniteTransition.animateFloat(
-        initialValue = 0.9f,
-        targetValue = 1.15f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "aura_pulse"
-    )
-
-    // 3. Chọn Drawable phù hợp theo trạng thái, cảm xúc và khẩu hình âm thanh (Sprite Keyframes)
-    val baseDrawableRes = getCompanionDrawable(state, emotion)
-    val currentDrawableRes = if (isSpeaking && !isSleeping) {
-        when {
-            amplitude < 0.05f -> baseDrawableRes
-            amplitude < 0.35f -> R.drawable.doraemon_speaking_half
-            else -> R.drawable.doraemon_speaking
+    val accent = parseHexColor(companion.palette.firstOrNull()) ?: Color(0xFF18DCE9)
+    val auraColor = when (state) {
+        ConnectionState.LISTENING -> Color(0xFF36D6B1)
+        ConnectionState.THINKING -> Color(0xFFFFC46B)
+        ConnectionState.SPEAKING -> accent
+        ConnectionState.SLEEPING -> Color.Transparent
+        else -> when (emotion.emotion) {
+            "excited", "proud" -> Color(0xFFFFC46B)
+            "sad" -> Color(0xFF8FA7BB)
+            else -> accent
         }
-    } else {
-        baseDrawableRes
     }
 
-    // 4. Tông màu nhân vật: nhuộm màu bộ art gốc theo bảng màu persona (giữ chi tiết/nét).
-    val accentColor = parseHexColor(companion.palette.firstOrNull())
-    val isDefaultLook = companion.id == "boy_blue"
-    val imageColorFilter = if (!isDefaultLook && accentColor != null) {
-        ColorFilter.tint(accentColor, BlendMode.Color)
-    } else null
-
-    // 5. Màu sắc hào quang theo trạng thái (fallback = màu chủ đạo của nhân vật)
-    val auraColor = getAuraColor(state, emotion, accentColor)
-
-    Box(
-        modifier = modifier
-            .size(280.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        // Bóng đổ mờ hoạt hình dưới chân nhân vật
+    Box(modifier = modifier.size(280.dp), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .offset(y = (-10).dp)
-                .size(width = 160.dp, height = 24.dp)
+                .offset(y = (-4).dp)
+                .size(width = 150.dp, height = 20.dp)
                 .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = 0.15f),
-                            Color.Transparent
-                        )
-                    )
-                )
+                .background(Color.Black.copy(alpha = 0.12f)),
         )
 
-        // Hào quang tỏa sáng phía sau nhân vật
-        if (auraColor != null) {
+        if (state != ConnectionState.SLEEPING) {
             Box(
                 modifier = Modifier
-                    .size(230.dp * auraPulse)
-                    .offset { IntOffset(0, floatOffset.toInt()) }
+                    .size(210.dp * halo)
+                    .blur(30.dp)
                     .clip(CircleShape)
-                    .blur(32.dp)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(auraColor.copy(alpha = 0.42f + talk * 0.24f), Color.Transparent),
+                        ),
+                    ),
+            )
+        }
+
+        if (state == ConnectionState.SPEAKING) {
+            Box(
+                modifier = Modifier
+                    .size(252.dp)
                     .drawBehind {
                         drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(
-                                    auraColor.copy(alpha = if (isSpeaking) 0.5f else 0.3f),
-                                    Color.Transparent
-                                )
-                            )
+                            color = auraColor.copy(alpha = 0.16f + talk * 0.34f),
+                            radius = size.minDimension * (0.40f + talk * 0.08f),
+                            center = Offset(size.width / 2, size.height / 2),
+                            style = Stroke(width = 2.dp.toPx()),
                         )
-                    }
+                    },
             )
         }
 
-        // Hình ảnh nhân vật 2D Anime sắc nét chuẩn Sprite Animation
-        Crossfade(
-            targetState = currentDrawableRes,
-            animationSpec = tween(durationMillis = if (isSpeaking) 80 else 250),
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .offset { IntOffset(0, floatOffset.toInt()) },
-            label = "companion_crossfade"
-        ) { drawableId ->
+                .offset { IntOffset(0, (bob * if (state == ConnectionState.SLEEPING) 0.25f else 1f).toInt()) }
+                .graphicsLayer {
+                    rotationZ = tilt
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = opacity
+                },
+            contentAlignment = Alignment.Center,
+        ) {
             Image(
-                painter = painterResource(id = drawableId),
-                contentDescription = "${companion.name} Avatar",
+                painter = painterResource(R.drawable.robo_avatar),
+                contentDescription = "${companion.name} đang ${stateLabel(state)}",
                 contentScale = ContentScale.Fit,
-                colorFilter = imageColorFilter,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
             )
-        }
-    }
-}
-
-/**
- * Lựa chọn Drawable resource phù hợp nhất cho nhân vật.
- */
-private fun getCompanionDrawable(state: ConnectionState, emotion: RobotEmotion): Int {
-    if (state == ConnectionState.SLEEPING) {
-        return R.drawable.doraemon_sleeping
-    }
-
-    // Ưu tiên trạng thái kết nối đặc thù
-    return when (state) {
-        ConnectionState.LISTENING -> R.drawable.doraemon_listening
-        ConnectionState.THINKING -> R.drawable.doraemon_thinking
-        else -> {
-            // Lựa chọn theo cảm xúc nội tâm của Emotion Engine
-            when (emotion.emotion) {
-                "excited" -> R.drawable.doraemon_excited
-                "proud" -> R.drawable.doraemon_proud
-                "surprised" -> R.drawable.doraemon_surprised
-                "displeased" -> R.drawable.doraemon_pout
-                "sad" -> R.drawable.doraemon_sad
-                "strict" -> R.drawable.doraemon_thinking
-                "happy" -> if (emotion.energy == "excited") R.drawable.doraemon_excited else R.drawable.doraemon_idle
-                else -> {
-                    if (emotion.energy == "sleepy" || emotion.energy == "drowsy") {
-                        R.drawable.doraemon_sleeping
-                    } else {
-                        R.drawable.doraemon_idle
-                    }
-                }
+            if (state == ConnectionState.SPEAKING && talk > 0.08f) {
+                Box(
+                    modifier = Modifier
+                        .offset(y = (-14).dp)
+                        .size(width = (16 + talk * 8).dp, height = (2 + talk * 7).dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xFF2FF6F9).copy(alpha = 0.6f + talk * 0.4f)),
+                )
             }
         }
     }
 }
 
-/**
- * Màu hào quang ánh sáng tỏa ra từ nhân vật.
- */
-private fun getAuraColor(state: ConnectionState, emotion: RobotEmotion, accent: Color?): Color? {
-    if (state == ConnectionState.SLEEPING) return null
-    val fallback = accent ?: Color(0xFF0288D1)
-
-    return when {
-        state == ConnectionState.LISTENING -> Color(0xFF10B981) // Emerald
-        state == ConnectionState.THINKING -> Color(0xFFF59E0B) // Amber
-        state == ConnectionState.SPEAKING -> fallback
-        emotion.emotion == "excited" -> Color(0xFFEC4899) // Pink
-        emotion.emotion == "proud" -> Color(0xFF6366F1) // Indigo
-        emotion.emotion == "surprised" -> Color(0xFFA855F7) // Purple
-        emotion.emotion == "displeased" -> Color(0xFFFB7185) // Rose
-        emotion.emotion == "sad" -> Color(0xFF94A3B8) // Slate
-        else -> fallback
-    }
+private fun stateLabel(state: ConnectionState): String = when (state) {
+    ConnectionState.LISTENING -> "lắng nghe"
+    ConnectionState.THINKING -> "suy nghĩ"
+    ConnectionState.SPEAKING -> "nói chuyện"
+    ConnectionState.SLEEPING -> "ngủ"
+    else -> "ở đây"
 }
 
-/** Chuyển "#RRGGBB" hoặc "#AARRGGBB" thành Compose Color. */
 private fun parseHexColor(hex: String?): Color? {
     if (hex.isNullOrBlank()) return null
     return try {
         val clean = hex.trim().removePrefix("#")
-        val value = clean.toLong(16)
         when (clean.length) {
-            6 -> Color(0xFF000000L or value)
-            8 -> Color(value)
+            6 -> Color(0xFF000000L or clean.toLong(16))
+            8 -> Color(clean.toLong(16))
             else -> null
         }
-    } catch (e: Exception) {
+    } catch (_: NumberFormatException) {
         null
     }
 }

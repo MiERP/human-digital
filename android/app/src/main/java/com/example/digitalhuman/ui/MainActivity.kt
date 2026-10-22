@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,6 +62,7 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.core.content.ContextCompat
 import com.example.digitalhuman.audio.AudioPlayer
+import com.example.digitalhuman.R
 import com.example.digitalhuman.audio.AudioRecorder
 import com.example.digitalhuman.network.ConnectionState
 import com.example.digitalhuman.network.GeminiLiveClient
@@ -1067,7 +1070,7 @@ fun TutorScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Huy hiệu Doraemon vui nhộn
+            // Huy hiệu cùng nhân vật với icon ứng dụng và màn trò chuyện.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -1075,7 +1078,11 @@ fun TutorScreen(
                     .background(Color.White.copy(alpha = 0.25f))
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Text("🐱", fontSize = 16.sp)
+                Image(
+                    painter = painterResource(R.drawable.robo_launcher),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp).clip(CircleShape),
+                )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = companionInfo.name.uppercase(),
