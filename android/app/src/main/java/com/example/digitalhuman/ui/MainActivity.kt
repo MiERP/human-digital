@@ -678,6 +678,8 @@ fun TutorScreen(
         if (!sessionEndPending) return
         sessionEndPending = false
         isSessionActive = false
+        clarificationRequest = null
+        activeLearningCue = null
         openingGreetingGate.stopSession()
         connectionState = ConnectionState.SLEEPING
         audioRecorderRef?.isMicListeningEnabled = false
@@ -1018,6 +1020,8 @@ fun TutorScreen(
                 // Manual VAD gửi ranh giới ngay trước pre-roll; hybrid backend cũ bỏ qua.
                 client.notifyActivityStart()
                 runOnMain {
+                    // Bé đã lên tiếng: chip hỏi lại của lượt trước không còn giá trị.
+                    clarificationRequest = null
                     if (connectionState == ConnectionState.SPEAKING || audioPlayer.isPlayingOrPending) {
                         // Barge-in: bé nói xen vào khi Doraemon đang phát -> dừng phát tức thì
                         // và bỏ luôn các chunk của lượt cũ còn đang bay tới.
@@ -1048,6 +1052,8 @@ fun TutorScreen(
     fun startSession() {
         sessionEndPending = false
         isSessionActive = true
+        clarificationRequest = null
+        activeLearningCue = null
         interruptionGate.reset()
         openingGreetingGate.startSession()
         setSpeakerphoneRouting(true)
@@ -1076,6 +1082,8 @@ fun TutorScreen(
         val generation = audioSessionLifecycle.end()
         sessionEndPending = false
         isSessionActive = false
+        clarificationRequest = null
+        activeLearningCue = null
         openingGreetingGate.stopSession()
         isCameraActive = false
         audioRecorder.isMicListeningEnabled = false
@@ -1519,16 +1527,18 @@ fun TutorScreen(
             emotion = robotEmotion
         )
 
-        // 4. Chip chọn chủ đề khi câu hỏi cần làm rõ.
-        clarificationRequest?.let { req ->
-            Spacer(modifier = Modifier.height(10.dp))
-            ClarificationChipBar(
-                request = req,
-                onChoiceSelected = { choice ->
-                    client.sendClarificationResponse(choice)
-                    clarificationRequest = null
-                }
-            )
+        // 4. Chip chọn chủ đề khi câu hỏi cần làm rõ — chỉ trong phiên đang mở.
+        if (isSessionActive) {
+            clarificationRequest?.let { req ->
+                Spacer(modifier = Modifier.height(10.dp))
+                ClarificationChipBar(
+                    request = req,
+                    onChoiceSelected = { choice ->
+                        client.sendClarificationResponse(choice)
+                        clarificationRequest = null
+                    }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))

@@ -53,8 +53,13 @@ class AudioRecorder(
         // Ngắn hơn trước (640ms) để giảm lag phản hồi; Silero hangover đã set 300ms.
         private const val SILENCE_FRAMES_THRESHOLD = 11
 
+        // Sau khi chốt cưỡng bức, tạm bỏ qua speech để không tái latch ngay.
+        private const val FORCE_END_QUIET_MS = 1000L
+
         // Ngưỡng RMS tối thiểu để coi là barge-in thật khi loa đang phát.
-        private const val MIN_BARGE_RMS = 0.06f
+        // Nâng lên 0.10 vì tiếng loa Luna lọt vào mic (dù có AEC) từng làm
+        // cô ấy tự ngắt lời mình nhiều lần trong một lượt.
+        private const val MIN_BARGE_RMS = 0.10f
 
         // Fallback khi Silero VAD không khởi tạo được.
         private const val RMS_FALLBACK_THRESHOLD = 0.035f
@@ -78,6 +83,10 @@ class AudioRecorder(
 
     @Volatile
     var isMicListeningEnabled = true
+
+    // Chẩn đoán chỉ bật ở bản debug, không làm nhiễu log bản phát hành.
+    private val isDebuggable: Boolean =
+        (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     // Biên độ âm thanh loa đang phát (0..1) để tính ngưỡng barge-in thích ứng.
     @Volatile
@@ -125,12 +134,12 @@ class AudioRecorder(
             }
         }
 
-        vad = try {
+        val localVad = try {
             Vad.builder()
                 .setContext(context)
                 .setSampleRate(SampleRate.SAMPLE_RATE_16K)
                 .setFrameSize(FrameSize.FRAME_SIZE_512)
-                .setMode(Mode.AGGRESSIVE)
+                .setMode(Mode.NORMAL)
                 .setSpeechDurationMs(100)
                 .setSilenceDurationMs(300)
                 .build()
@@ -138,6 +147,7 @@ class AudioRecorder(
             e.printStackTrace()
             null
         }
+        vad = localVad
 
         // Lớp lọc gió + tạp âm phần mềm (high-pass 200Hz + adaptive noise gate).
         val noiseCleaner = NoiseCleaner()
@@ -145,18 +155,38 @@ class AudioRecorder(
         audioRecord?.startRecording()
         isRecording = true
 
-        recordingJob = scope.launch(Dispatchers.IO) {
+        val job = scope.launch(Dispatchers.IO) {
             val frame = ByteArray(VAD_FRAME_BYTES)
             val preRoll = ArrayDeque<ByteArray>(PRE_ROLL_FRAMES + 1)
             var userSpeaking = false
             var silenceFrames = 0
             var speechOnsetFrames = 0
+            var loudOnsetFrames = 0
+            var utteranceFrames = 0
+            var muteOnsetUntil = 0L
             var frameOffset = 0
+            var diagnosticStartedAt = System.currentTimeMillis()
+            var diagnosticPeakRms = 0f
+            var diagnosticVadFrames = 0
+            var diagnosticEnabledFrames = 0
+            var diagnosticPlaybackFrames = 0
+            var diagnosticOnsets = 0
 
             while (isActive && isRecording) {
-                // Đọc đúng 1024 bytes (512 mẫu 16-bit PCM = 32ms)
-                val readBytes = audioRecord?.read(frame, frameOffset, frame.size - frameOffset) ?: 0
-                if (readBytes <= 0) continue
+                // Đọc đúng 1024 bytes (512 mẫu 16-bit PCM = 32ms).
+                // Bọc lỗi vì stopRecording() có thể giải phóng AudioRecord đúng lúc.
+                val readBytes = try {
+                    audioRecord?.read(frame, frameOffset, frame.size - frameOffset) ?: 0
+                } catch (e: Exception) {
+                    if (isRecording) {
+                        Log.w("AudioRecorder", "AudioRecord read failed: ${e.message}")
+                    }
+                    0
+                }
+                if (readBytes <= 0) {
+                    if (!isRecording) break
+                    continue
+                }
 
                 frameOffset += readBytes
                 if (frameOffset < frame.size) continue
@@ -175,14 +205,37 @@ class AudioRecorder(
                 // nói, mic vẫn nghe để bé có thể ngắt lời (full-duplex barge-in).
                 val micDisabled = !isMicListeningEnabled
                 val playing = isPlaybackActive || now < playbackGraceUntil
-                val echoThreshold = (lastPlaybackAmplitude * 0.35f).coerceAtLeast(MIN_BARGE_RMS)
+                val echoThreshold = (lastPlaybackAmplitude * 0.5f).coerceAtLeast(MIN_BARGE_RMS)
 
-                // Silero VAD phát hiện giọng nói từ audio đã qua lọc nhiễu
-                val vadInstance = vad
-                val isSpeech = if (vadInstance != null) {
-                    vadInstance.isSpeech(frameData)
+                // Dùng đúng instance VAD của phiên này. Nếu stopRecording() đã
+                // đóng nó, coi frame là im lặng thay vì ném lỗi làm sập app.
+                val isSpeech = if (localVad != null) {
+                    try {
+                        localVad.isSpeech(frameData)
+                    } catch (e: Exception) {
+                        Log.w("AudioRecorder", "VAD unavailable during frame: ${e.message}")
+                        false
+                    }
                 } else {
                     cleanRms > RMS_FALLBACK_THRESHOLD
+                }
+                // Sau khi chốt cưỡng bức, xem các frame kế tiếp là im lặng trong
+                // một khoảng ngắn để VAD không mở lại lượt ngay trên cùng nhiễu.
+                val effectiveSpeech = isSpeech && now >= muteOnsetUntil
+
+                // Chẩn đoán tạm thời: chỉ thống kê mức tín hiệu/trạng thái, không ghi âm hay transcript.
+                diagnosticPeakRms = maxOf(diagnosticPeakRms, cleanRms)
+                if (isSpeech) diagnosticVadFrames++
+                if (!micDisabled) diagnosticEnabledFrames++
+                if (playing) diagnosticPlaybackFrames++
+                if (isDebuggable && now - diagnosticStartedAt >= 2000L) {
+                    Log.i("AudioRecorder", "Mic diagnostics: enabledFrames=$diagnosticEnabledFrames vadFrames=$diagnosticVadFrames onsets=$diagnosticOnsets playbackFrames=$diagnosticPlaybackFrames peakRms=${"%.3f".format(diagnosticPeakRms)}")
+                    diagnosticStartedAt = now
+                    diagnosticPeakRms = 0f
+                    diagnosticVadFrames = 0
+                    diagnosticEnabledFrames = 0
+                    diagnosticPlaybackFrames = 0
+                    diagnosticOnsets = 0
                 }
 
                 if (micDisabled) {
@@ -190,10 +243,13 @@ class AudioRecorder(
                     // Đặt userSpeaking = false mà KHÔNG gọi onSpeechEnded() để tránh
                     // gửi tín hiệu kết thúc lượt giả mạo.
                     speechOnsetFrames = 0
+                    loudOnsetFrames = 0
                     silenceFrames = 0
+                    utteranceFrames = 0
+                    muteOnsetUntil = 0L
                     preRoll.clear()
                     userSpeaking = false
-                } else if (isSpeech) {
+                } else if (effectiveSpeech) {
                     if (!userSpeaking) {
                         speechOnsetFrames++
                         preRoll.addLast(frameData)
@@ -202,19 +258,36 @@ class AudioRecorder(
                         }
 
                         // Debounce thích ứng:
-                        // - Loa đang phát (barge-in): cần onset dài (~320ms) VÀ to hơn
-                        //   ngưỡng echo mới coi là bé ngắt lời thật.
+                        // - Loa đang phát (barge-in): cần onset dài (~450ms) VÀ đủ to
+                        //   trên ngưỡng echo mới coi là bé ngắt lời thật.
                         // - Khi loa đã dứt: chỉ cần ~64ms để không bỏ câu đáp ngắn.
                         val requiredOnset = requiredSpeechOnsetFrames(playing)
-                        val loudEnough = !playing || cleanRms > echoThreshold
+                        // Khi loa không phát, vẫn cần vượt sàn năng lượng thích ứng.
+                        // Trước đây một frame im lặng (RMS=0.000) vẫn được VAD nhận
+                        // là speech, mở lượt và khiến app không bao giờ chốt lượt.
+                        val onsetFloor = speechOnsetFloor(
+                            playing = playing,
+                            echoThreshold = echoThreshold,
+                            noiseFloor = noiseCleaner.noiseFloorRms,
+                        )
+                        // Đếm riêng các frame đủ to. Chỉ cần một frame to sau nhiều
+                        // frame VAD "speech" là đủ để tiếng loa tự ngắt lời Luna.
+                        if (cleanRms > onsetFloor) {
+                            loudOnsetFrames++
+                        } else {
+                            loudOnsetFrames = 0
+                        }
 
-                        if (speechOnsetFrames >= requiredOnset && loudEnough) {
+                        if (speechOnsetFrames >= requiredOnset && loudOnsetFrames >= requiredOnset) {
+                            diagnosticOnsets++
                             Log.i(
                                 "AudioRecorder",
                                 "Speech onset: playback=$playing frames=$speechOnsetFrames rms=${"%.3f".format(cleanRms)} echoThreshold=${"%.3f".format(echoThreshold)}",
                             )
                             userSpeaking = true
                             silenceFrames = 0
+                            loudOnsetFrames = 0
+                            utteranceFrames = 0
 
                             // 1. Báo bắt đầu lượt (UI: nếu đang phát thì flush loa ngay).
                             onSpeechStarted()
@@ -227,29 +300,61 @@ class AudioRecorder(
                     } else {
                         silenceFrames = 0
                         speechOnsetFrames = 0
+                        loudOnsetFrames = 0
                         onAudioChunk(frameData)
+                        // VAD có thể giữ "speech" mãi trong phòng ồn. Chốt lượt
+                        // sau ~20 giây để Gemini luôn có ranh giới lượt.
+                        utteranceFrames++
+                        if (shouldForceEndUtterance(utteranceFrames)) {
+                            Log.i("AudioRecorder", "Max utterance reached; closing turn to avoid VAD latch")
+                            userSpeaking = false
+                            silenceFrames = 0
+                            speechOnsetFrames = 0
+                            loudOnsetFrames = 0
+                            utteranceFrames = 0
+                            preRoll.clear()
+                            muteOnsetUntil = now + FORCE_END_QUIET_MS
+                            onSpeechEnded()
+                        }
                     }
                 } else if (userSpeaking) {
                     // Trong khi đang nói nhưng có khoảng nghỉ giữa các từ:
                     // Vẫn stream audio để âm cuối tự nhiên và đếm frame khoảng lặng
                     speechOnsetFrames = 0
+                    loudOnsetFrames = 0
                     onAudioChunk(frameData)
                     silenceFrames++
                     if (silenceFrames >= SILENCE_FRAMES_THRESHOLD) {
                         userSpeaking = false
                         silenceFrames = 0
+                        speechOnsetFrames = 0
+                        loudOnsetFrames = 0
+                        utteranceFrames = 0
                         onSpeechEnded()
                     }
                 } else {
                     // Đang im lặng bình thường: lưu đệm pre-roll
                     speechOnsetFrames = 0
+                    loudOnsetFrames = 0
                     silenceFrames = 0
+                    utteranceFrames = 0
                     preRoll.addLast(frameData)
                     while (preRoll.size > PRE_ROLL_FRAMES) {
                         preRoll.removeFirst()
                     }
                 }
             }
+        }
+
+        recordingJob = job
+        // Chỉ đóng VAD sau khi coroutine thu âm đã dừng hẳn. Đóng sớm trong
+        // stopRecording() làm isSpeech() ném "You can't use Vad after closing session!".
+        job.invokeOnCompletion {
+            try {
+                localVad?.close()
+            } catch (_: Exception) {
+            }
+            if (vad === localVad) vad = null
         }
     }
 
@@ -289,9 +394,8 @@ class AudioRecorder(
         recordingJob = null
 
         try {
-            vad?.close()
-            vad = null
-
+            // VAD được đóng trong invokeOnCompletion của job thu âm, tránh
+            // tranh chấp với frame đang xử lý.
             echoCanceler?.release()
             echoCanceler = null
             noiseSuppressor?.release()
@@ -319,4 +423,25 @@ class AudioRecorder(
     }
 }
 
-internal fun requiredSpeechOnsetFrames(playing: Boolean): Int = if (playing) 10 else 2
+internal fun requiredSpeechOnsetFrames(playing: Boolean): Int = if (playing) 14 else 2
+
+// Chốt lượt tối đa khi VAD "latch" speech liên tục (manual VAD không có
+// server VAD bảo hiểm): 625 frames x 32ms = ~20 giây.
+internal const val MAX_UTTERANCE_FRAMES = 625
+
+internal fun shouldForceEndUtterance(utteranceFrames: Int): Boolean =
+    utteranceFrames >= MAX_UTTERANCE_FRAMES
+
+// Sàn năng lượng cho onset: chặn VAD "latch" speech từ frame gần như im lặng
+// (đã quan sát onset RMS=0.000 làm app kẹt lượt vĩnh viễn).
+private const val ONSET_MIN_RMS = 0.008f
+
+/**
+ * Ngưỡng RMS tối thiểu để bắt đầu một lượt nói.
+ *
+ * Khi loa đang phát, phải vượt ngưỡng echo để tránh tiếng vọng kích hoạt barge-in.
+ * Khi loa im, vẫn cần vượt sàn nhiễu nền: Silero có thể trả "speech" cho một frame
+ * gần như im lặng (RMS≈0), và nếu mở lượt từ đó thì app kẹt không bao giờ chốt lượt.
+ */
+internal fun speechOnsetFloor(playing: Boolean, echoThreshold: Float, noiseFloor: Float): Float =
+    if (playing) echoThreshold else maxOf(ONSET_MIN_RMS, noiseFloor * 1.8f)

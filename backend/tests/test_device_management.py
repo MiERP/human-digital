@@ -3,8 +3,12 @@ import tempfile
 import os
 import shutil
 import asyncio
-from backend.memory_manager import MemoryManager
-from backend.connection_tracker import ActiveConnectionTracker
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from memory_manager import MemoryManager
+from connection_tracker import ActiveConnectionTracker
 
 class TestDeviceManagementAndBan(unittest.TestCase):
 
