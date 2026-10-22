@@ -1191,15 +1191,15 @@ fun TutorScreen(
                   Spacer(modifier = Modifier.width(6.dp))
                   Text(
                       text = when (childDetectedEmotion) {
-                          "super_happy" -> "😆 Bé cười rất tươi!"
-                          "happy" -> "😊 Bé đang vui"
-                          "curious" -> "🤔 Nghiêng đầu tò mò"
-                          "attentive" -> "👀 Đang lắng nghe"
-                          "focused" -> "👀 Đang tập trung"
-                          "distracted" -> "🎈 Đang nhìn quanh"
-                          "sleepy" -> "🌙 Bé hơi buồn ngủ"
-                          "no_face" -> "🔍 Đang tìm bé..."
-                          else -> "👀 Đang lắng nghe"
+                          "super_happy" -> "😆 Vui"
+                          "happy" -> "😊 Vui"
+                          "curious" -> "🤔 Tò mò"
+                          "attentive" -> "👀 Đang nghe"
+                          "focused" -> "👀 Tập trung"
+                          "distracted" -> "🎈 Nhìn quanh"
+                          "sleepy" -> "🌙 Buồn ngủ"
+                          "no_face" -> "🔍 Tìm bé..."
+                          else -> "👀 Đang nghe"
                       },
                       color = Color.White,
                       fontSize = 11.sp,
@@ -1524,13 +1524,18 @@ fun TutorScreen(
             }
         }
 
-        // 3. Khung Thoại Manga Hoạt Hình (Comic Speech Bubble)
-        MangaSpeechBubble(
-            text = getDoraemonSpeechText(connectionState, robotEmotion, isSessionActive, childDetectedEmotion)
-                .replace("Doraemon", companionInfo.name),
-            state = connectionState,
-            emotion = robotEmotion
-        )
+        // 3. Trạng thái gọn: không dùng câu thoại mẫu dài.
+        if (isSessionActive) {
+            CompanionStatusPill(state = connectionState)
+        } else {
+            Text(
+                text = "Chạm Chuông Vàng để bắt đầu",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.2.sp
+            )
+        }
 
         // 4. Chip chọn chủ đề khi câu hỏi cần làm rõ — chỉ trong phiên đang mở.
         if (isSessionActive) {
@@ -1662,123 +1667,81 @@ private fun saveCachedCompanion(prefs: android.content.SharedPreferences, compan
         .apply()
 }
 
-private fun getDoraemonSpeechText(
-    state: ConnectionState,
-    emotion: RobotEmotion,
-    isSessionActive: Boolean,
-    childEmotion: String = "neutral"
-): String {
-    if (!isSessionActive) {
-        return "Chào bạn nhỏ! Chạm Chuông Vàng rồi kể mình nghe hôm nay của bạn thế nào nhé! ✨"
-    }
-    if (state == ConnectionState.LISTENING) {
-        return when (childEmotion) {
-            "happy" -> "Doraemon thấy bé đang cười vui lắm nè! Kể cho mình nghe với nha! 😊✨"
-            "confused" -> "Có chuyện gì làm bé băn khoăn à? Mình nghe đây. 💛"
-            "sleepy" -> "Bé ơi, bé có thấy mệt không? Cứ thoải mái tâm sự với Doraemon nhé! 🌙"
-            "focused" -> "Bé đang chăm chú ghê. Mình ở đây với bé nè! 👀"
-            else -> "Doraemon đang chăm chú lắng nghe bé nói nè! Hãy nói gì đó với mình nhé! 👂"
-        }
-    }
-    return when (state) {
-        ConnectionState.SLEEPING -> "Khò khò... Doraemon đang ngủ một lát. Chúc bé ngủ ngon nha! Zzz... 🌙"
-        ConnectionState.THINKING -> "Để Doraemon nghĩ một chút nhé... 🤔"
-        ConnectionState.SPEAKING -> {
-            when (emotion.emotion) {
-                "excited" -> "Woohoo! Chuyện này vui ghê bé ơi! 🎉"
-                "proud" -> "Doraemon thấy vui cùng bé lắm! 🌟"
-                "surprised" -> "Ôi ngạc nhiên chưa! Doraemon vừa học thêm một điều thú vị từ bé đấy! 😮"
-                "displeased" -> "Hừm, bé trêu Doraemon đấy à? Đùa xíu thôi, Doraemon thương bé nhất! 😋"
-                "sad" -> "Đừng buồn nhé, có Doraemon luôn ở bên cạnh bé nè! Cố lên nào! ❤️"
-                else -> "Doraemon đang trò chuyện với bé nè! 💬"
-            }
-        }
-        ConnectionState.CONNECTING -> "Đang mở Cửa Thần Kỳ kết nối đến thế giới tương lai... 🚀"
-        ConnectionState.ERROR -> "Ôi Cửa Thần Kỳ bị nghẽn một chút, bé thử chạm lại Chuông Vàng nhé! 🔧"
-        else -> "Doraemon ở đây rồi. Bé muốn kể chuyện gì cho mình nghe nào? 🎈"
-    }
-}
-
 /**
- * Khung thoại phong cách Manga hoạt hình (Comic Speech Bubble).
+ * Pill trạng thái gọn thay cho bong bóng thoại mẫu.
+ * Chỉ một nhãn ngắn + chấm màu; trạng thái "đang nói" có equalizer nhỏ.
  */
 @Composable
-fun MangaSpeechBubble(
-    text: String,
+fun CompanionStatusPill(
     state: ConnectionState,
-    emotion: RobotEmotion,
     modifier: Modifier = Modifier
 ) {
-    val isThinking = state == ConnectionState.THINKING
-    val isExcited = emotion.emotion == "excited" || emotion.emotion == "proud"
-
-    val infiniteTransition = rememberInfiniteTransition(label = "thinking_anim")
-    val thinkingAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1.0f,
+    val (label, color) = when (state) {
+        ConnectionState.CONNECTING -> "Đang kết nối" to Color(0xFF93C5FD)
+        ConnectionState.LISTENING -> "Đang nghe" to Color(0xFF34D399)
+        ConnectionState.THINKING -> "Đang nghĩ" to Color(0xFFFBBF24)
+        ConnectionState.SPEAKING -> "Đang nói" to Color(0xFF38BDF8)
+        ConnectionState.SLEEPING -> "Đang nghỉ" to Color(0xFF94A3B8)
+        ConnectionState.ERROR -> "Mất kết nối" to Color(0xFFF87171)
+        else -> "Sẵn sàng" to Color(0xFFE0F2FE)
+    }
+    val isBusy = state == ConnectionState.THINKING
+    val transition = rememberInfiniteTransition(label = "status_pulse")
+    val pulse by transition.animateFloat(
+        initialValue = if (isBusy) 0.35f else 0.7f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(600, easing = FastOutSlowInEasing),
+            animation = tween(700, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "thinking_glow"
+        label = "status_alpha"
     )
 
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.18f))
+            .border(1.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Thân bong bóng thoại bo tròn hoạt hình
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(Color.White.copy(alpha = 0.95f))
-                .border(
-                    width = if (isThinking) 2.5.dp else 2.dp,
-                    color = if (isExcited) Color(0xFFF472B6)
-                            else if (isThinking) Color(0xFFFBBF24).copy(alpha = thinkingAlpha)
-                            else Color(0xFF38BDF8),
-                    shape = RoundedCornerShape(22.dp)
-                )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = pulse))
+        )
+        Spacer(modifier = Modifier.width(7.dp))
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.2.sp
+        )
+        if (state == ConnectionState.SPEAKING) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = text,
-                    color = Color(0xFF0F172A),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 20.sp,
-                    textAlign = TextAlign.Center
-                )
-                if (isThinking) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        repeat(3) { index ->
-                            val dotAlpha by infiniteTransition.animateFloat(
-                                initialValue = 0.2f,
-                                targetValue = 1.0f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(450, delayMillis = index * 150, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "dot_$index"
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .padding(horizontal = 3.dp)
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFF59E0B).copy(alpha = dotAlpha))
-                            )
-                        }
-                    }
+                listOf(5.dp, 9.dp, 6.dp).forEachIndexed { index, barHeight ->
+                    val barScale by transition.animateFloat(
+                        initialValue = 0.35f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(420, delayMillis = index * 90, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "status_bar_$index"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(2.dp)
+                            .height(barHeight * barScale)
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(color.copy(alpha = 0.9f))
+                    )
                 }
             }
         }
