@@ -23,3 +23,4 @@ Keep gesture calculations deterministic in `companionMotion` and test low/high a
 2. Mouth continues following output audio amplitude; listening and sleeping do not perform speech gestures.
 3. The chosen name appears before a voice session starts, remains correct after profile edits, and falls back to the selected preset name only when the child left it blank.
 4. A legacy profile with no companion selection never presents the old Dora default as a chosen name.
+5. During speech the shoulder-to-elbow segment moves only 3–4 degrees, without exposing a triangular armpit gap. Each forearm starts in a gently bent pose (internal elbow angle about 140–150 degrees) and pulses only another 5–10 degrees with voice amplitude, alternating up/down without sharp motion. The visible elbow joint is rounded rather than a triangular cut; both arms relax when not speaking.

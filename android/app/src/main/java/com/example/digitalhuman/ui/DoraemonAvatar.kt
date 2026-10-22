@@ -63,12 +63,14 @@ fun CompanionAvatar(
     val gesture by loop.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse),
         label = "hand_gesture",
     )
     val pose = companionMotion(state, amplitude, gesture)
-    val leftArm by animateFloatAsState(pose.leftArmDegrees, tween(90), label = "left_arm")
-    val rightArm by animateFloatAsState(pose.rightArmDegrees, tween(90), label = "right_arm")
+    val leftArm by animateFloatAsState(pose.leftArmDegrees, tween(180), label = "left_arm")
+    val rightArm by animateFloatAsState(pose.rightArmDegrees, tween(180), label = "right_arm")
+    val leftElbow by animateFloatAsState(pose.leftElbowDegrees, tween(240), label = "left_elbow")
+    val rightElbow by animateFloatAsState(pose.rightElbowDegrees, tween(240), label = "right_elbow")
     val gazeX by animateFloatAsState(pose.gazeX, tween(220), label = "gaze_x")
     val gazeY by animateFloatAsState(pose.gazeY, tween(220), label = "gaze_y")
     val eyeOpen by animateFloatAsState(pose.eyeOpen, tween(120), label = "eye_open")
@@ -95,7 +97,7 @@ fun CompanionAvatar(
                 )
             }
 
-            // Draw the moving arms behind the fixed head and torso.
+            // Upper arms sit behind the body; forearms can move in front without exposing an armpit gap.
             fun armOutline(vararg corners: Pair<Float, Float>) = Path().apply {
                 corners.forEachIndexed { index, (x, y) ->
                     val corner = point(x, y)
@@ -103,21 +105,52 @@ fun CompanionAvatar(
                 }
                 close()
             }
-            val leftArmOutline = armOutline(
+            val leftUpperArm = armOutline(
                 0f to 765f, 305f to 765f, 305f to 955f,
-                240f to 1030f, 245f to 1370f, 0f to 1370f,
+                240f to 1025f, 165f to 1025f, 125f to 1000f, 0f to 1000f,
             )
-            val rightArmOutline = armOutline(
-                800f to 765f, 1105f to 765f, 1105f to 1370f,
-                860f to 1370f, 865f to 1030f, 800f to 955f,
+            val leftForearm = armOutline(
+                145f to 995f, 210f to 995f, 232f to 1050f,
+                255f to 1370f, 0f to 1370f, 80f to 1070f,
+            )
+            val rightUpperArm = armOutline(
+                800f to 765f, 1105f to 765f, 1105f to 1000f,
+                980f to 1000f, 940f to 1025f, 865f to 1025f, 800f to 955f,
+            )
+            val rightForearm = armOutline(
+                895f to 995f, 960f to 995f, 1025f to 1070f,
+                1105f to 1370f, 850f to 1370f, 873f to 1050f,
             )
             withTransform({ rotate(leftArm, point(310f, 805f)) }) {
-                clipPath(leftArmOutline) { region(0, 765, 340, 600) }
+                drawCircle(Color(0xFF292B2D).copy(alpha = opacity), 35f * imageScale, point(188f, 1025f))
+                clipPath(leftUpperArm) { region(0, 765, 340, 265) }
             }
             withTransform({ rotate(rightArm, point(795f, 805f)) }) {
-                clipPath(rightArmOutline) { region(765, 765, 340, 600) }
+                drawCircle(Color(0xFF292B2D).copy(alpha = opacity), 35f * imageScale, point(917f, 1025f))
+                clipPath(rightUpperArm) { region(765, 765, 340, 265) }
             }
             region(290, 755, 525, 530)
+            withTransform({ rotate(leftArm, point(310f, 805f)) }) {
+                withTransform({ rotate(leftElbow, point(188f, 1025f)) }) {
+                    clipPath(leftForearm) { region(0, 995, 260, 375) }
+                }
+            }
+            withTransform({ rotate(rightArm, point(795f, 805f)) }) {
+                withTransform({ rotate(rightElbow, point(917f, 1025f)) }) {
+                    clipPath(rightForearm) { region(845, 995, 260, 375) }
+                }
+            }
+            val jointShade = Brush.verticalGradient(
+                listOf(Color(0xFF5B5E61).copy(alpha = opacity), Color(0xFF242629).copy(alpha = opacity)),
+                startY = point(0f, 990f).y,
+                endY = point(0f, 1060f).y,
+            )
+            withTransform({ rotate(leftArm, point(310f, 805f)) }) {
+                drawOval(jointShade, topLeft = point(153f, 989f), size = Size(70f * imageScale, 72f * imageScale))
+            }
+            withTransform({ rotate(rightArm, point(795f, 805f)) }) {
+                drawOval(jointShade, topLeft = point(882f, 989f), size = Size(70f * imageScale, 72f * imageScale))
+            }
             region(0, 0, sprite.width, 770)
 
             drawRobotFace(::point, imageScale, eyeOpen * blink, gazeX, gazeY, mouth, state, emotion)

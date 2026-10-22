@@ -33,16 +33,16 @@ class CompanionMotionTest {
     @Test fun speakingArmsRiseAndFallAlternatelyAcrossGestureBeat() {
         val beatStart = companionMotion(ConnectionState.SPEAKING, 1f, 0f)
         val beatEnd = companionMotion(ConnectionState.SPEAKING, 1f, 1f)
-        assertTrue(beatEnd.leftArmDegrees - beatStart.leftArmDegrees > 50f)
-        assertTrue(beatEnd.rightArmDegrees - beatStart.rightArmDegrees > 50f)
-        assertTrue(beatEnd.leftArmDegrees > 105f)
-        assertTrue(beatStart.rightArmDegrees < -105f)
+        assertTrue(beatEnd.leftArmDegrees > beatStart.leftArmDegrees)
+        assertTrue(beatEnd.rightArmDegrees > beatStart.rightArmDegrees)
+        assertTrue(beatEnd.leftArmDegrees <= 4f)
+        assertTrue(beatStart.rightArmDegrees >= -4f)
     }
 
     @Test fun quietSpeechUsesSmallerGesturesAndListeningDoesNotPulse() {
         val quiet = companionMotion(ConnectionState.SPEAKING, 0f, 1f)
         val loud = companionMotion(ConnectionState.SPEAKING, 1f, 1f)
-        assertTrue(loud.leftArmDegrees > quiet.leftArmDegrees + 40f)
+        assertTrue(loud.leftArmDegrees > quiet.leftArmDegrees + 1f)
         assertEquals(
             companionMotion(ConnectionState.LISTENING, 0f, 0f).leftArmDegrees,
             companionMotion(ConnectionState.LISTENING, 0f, 1f).leftArmDegrees,
@@ -50,9 +50,34 @@ class CompanionMotionTest {
         )
     }
 
-    @Test fun ordinarySpeechLevelCanRaiseAHandAboveTheShoulder() {
+    @Test fun ordinarySpeechLevelKeepsShoulderLiftGentle() {
         val motion = companionMotion(ConnectionState.SPEAKING, 0.08f, 1f)
-        assertTrue(motion.leftArmDegrees > 105f)
+        assertTrue(motion.leftArmDegrees in 2f..4f)
+    }
+
+    @Test fun speakingBendsElbowsAsHandsAlternate() {
+        val start = companionMotion(ConnectionState.SPEAKING, 0.5f, 0f)
+        val end = companionMotion(ConnectionState.SPEAKING, 0.5f, 1f)
+        assertTrue(start.leftElbowDegrees in -20f..-15f)
+        assertTrue(end.leftElbowDegrees in -28f..-23f)
+        assertTrue(start.leftElbowDegrees - end.leftElbowDegrees in 5f..10f)
+        assertTrue(end.rightElbowDegrees in 15f..20f)
+        assertTrue(start.rightElbowDegrees - end.rightElbowDegrees in 5f..10f)
+    }
+
+    @Test fun idleElbowsStayRelaxedAndDoNotFollowSpeechBeat() {
+        val listening = companionMotion(ConnectionState.LISTENING, 0.5f, 1f)
+        assertEquals(0f, listening.leftElbowDegrees, 0.001f)
+        assertEquals(0f, listening.rightElbowDegrees, 0.001f)
+    }
+
+    @Test fun elbowPulseFollowsVoiceLevelAndSettlesDuringSilence() {
+        val silentStart = companionMotion(ConnectionState.SPEAKING, 0f, 0f)
+        val silentEnd = companionMotion(ConnectionState.SPEAKING, 0f, 1f)
+        val voicedEnd = companionMotion(ConnectionState.SPEAKING, 1f, 1f)
+        assertEquals(-18f, silentStart.leftElbowDegrees, 0.001f)
+        assertEquals(silentStart.leftElbowDegrees, silentEnd.leftElbowDegrees, 0.001f)
+        assertTrue(voicedEnd.leftElbowDegrees < silentEnd.leftElbowDegrees - 5f)
     }
 
     @Test fun sleepingIsStillAndDimmer() {
