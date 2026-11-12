@@ -11,7 +11,7 @@ Có **2 nhóm vấn đề độc lập**:
 | Nhóm | Biểu hiện | Nguyên nhân gốc |
 |------|-----------|-----------------|
 | **A — Lag VPS** | Trò chuyện bị dừng, chờ, giật cục | Wikipedia multi-request + DNS lookup blocking trong safety guard |
-| **B — Kiến thức sai** | Doraemon nói thông tin không chính xác / không rõ nguồn | Curated KB quá ít, Wikipedia trả về đoạn không phù hợp trẻ em |
+| **B — Kiến thức sai** | Havs Robot nói thông tin không chính xác / không rõ nguồn | Curated KB quá ít, Wikipedia trả về đoạn không phù hợp trẻ em |
 
 ---
 
@@ -44,7 +44,7 @@ def _fetch_wiki_combined(self, query, lang, ...):
 
 **Tổng timeout worst-case: ~14-18s**. Trên VPS datacenter Singapore → Wikipedia thường 200-500ms/request nhưng đôi khi spike 2-3s. **Với VPS ở Việt Nam + Wikipedia = 500ms-1s/request × 4-6 requests = 2-6s latency mỗi câu hỏi kiến thức** — đây chính là nguồn gốc "không mượt".
 
-> Timeout trong `asyncio.wait_for(..., timeout=2.5)` ở `main.py` chỉ bọc **tổng pipeline**, nhưng pipeline gọi nhiều `.urlopen()` nối tiếp, mỗi cái có timeout **2.0s** riêng. Nếu 3 summary requests mỗi cái mất 1.5s thì tổng = 4.5s > 2.5s và sẽ bị timeout — Doraemon không có thông tin để trả lời.
+> Timeout trong `asyncio.wait_for(..., timeout=2.5)` ở `main.py` chỉ bọc **tổng pipeline**, nhưng pipeline gọi nhiều `.urlopen()` nối tiếp, mỗi cái có timeout **2.0s** riêng. Nếu 3 summary requests mỗi cái mất 1.5s thì tổng = 4.5s > 2.5s và sẽ bị timeout — Havs Robot không có thông tin để trả lời.
 
 ---
 
@@ -106,7 +106,7 @@ CURATED_SCIENCE: 2 entries (blue whale, T-Rex)
 
 ### 🔴 B2: Wikipedia Simple English trả về nội dung không phù hợp trẻ em / thiếu chính xác
 
-Wikipedia Simple English là nguồn **tiếng Anh đơn giản** — không phải nguồn tiếng Việt. Khi Doraemon nhận snippet từ vi.wikipedia.org, đó là bản dịch máy một phần hoặc bài ngắn không đầy đủ. Ví dụ:
+Wikipedia Simple English là nguồn **tiếng Anh đơn giản** — không phải nguồn tiếng Việt. Khi Havs Robot nhận snippet từ vi.wikipedia.org, đó là bản dịch máy một phần hoặc bài ngắn không đầy đủ. Ví dụ:
 
 ```python
 # Snippet bị cắt cứng ở 400 ký tự:
@@ -130,7 +130,7 @@ Kết quả: Gemini nhận được đoạn Wikipedia bị cắt đôi câu, kh�
 VIOLENCE_PATTERNS = [r"\b(kill|murder|weapon|gun|knife|stab|blood|suicide|die|...)"]
 ```
 
-Wikipedia về Lịch sử Việt Nam, Chiến tranh, Triều đại... thường có các từ như "killed", "died", "war", "battle" trong snippet. **`_validate_and_clean()` sẽ loại bỏ toàn bộ kết quả đó**, Doraemon không có gì để trả lời → nói tự do dựa trên training data → có thể sai.
+Wikipedia về Lịch sử Việt Nam, Chiến tranh, Triều đại... thường có các từ như "killed", "died", "war", "battle" trong snippet. **`_validate_and_clean()` sẽ loại bỏ toàn bộ kết quả đó**, Havs Robot không có gì để trả lời → nói tự do dựa trên training data → có thể sai.
 
 Ví dụ: Wikipedia về "Trận Điện Biên Phủ" sẽ bị drop vì snippet có "killed" / "died in battle".
 
@@ -140,7 +140,7 @@ Ví dụ: Wikipedia về "Trận Điện Biên Phủ" sẽ bị drop vì snippet
 
 System prompt viết: *"Never fabricate dates, scientific numbers, or historical events. If search returns no results, say honestly..."*
 
-Nhưng trong thực tế với Gemini 2.5 Flash, khi search bị timeout (2.5s) hoặc bị drop bởi safety guard → model nhận `tool_output_text = "Doraemon đang cố gắng suy nghĩ nhưng mạng hơi chậm"` → model có thể dùng internal knowledge để trả lời thay vì nói thật → **factual errors**.
+Nhưng trong thực tế với Gemini 2.5 Flash, khi search bị timeout (2.5s) hoặc bị drop bởi safety guard → model nhận `tool_output_text = "Havs Robot đang cố gắng suy nghĩ nhưng mạng hơi chậm"` → model có thể dùng internal knowledge để trả lời thay vì nói thật → **factual errors**.
 
 ---
 
@@ -183,7 +183,7 @@ for idx, title in enumerate(titles[:min(top_k, 2)]):  # max 2 thay vì top_k=3
 
 #### 2. Tăng `MAX_SNIPPET_CHARS` từ 400 → 800 để context đầy đủ hơn
 ```python
-MAX_SNIPPET_CHARS = 800  # Doraemon sẽ tóm tắt, không đọc thô
+MAX_SNIPPET_CHARS = 800  # Havs Robot sẽ tóm tắt, không đọc thô
 ```
 
 #### 3. Chạy DNS lookup trong thread riêng trong `assert_safe_url`

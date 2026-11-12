@@ -525,7 +525,7 @@ class MemoryManager:
     def build_memory_context(self, child_id: str = "default_child") -> str:
         """
         Tạo đoạn ngữ cảnh ngắn gọn (<250 tokens) tối ưu để nhúng vào System Prompt của Gemini Live.
-        Giúp Doraemon nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
+        Giúp Havs Robot nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
         """
         profile = self.get_or_create_profile(child_id)
         companion_name = resolve_persona(profile)["name"]
@@ -614,7 +614,7 @@ class MemoryManager:
     ) -> int:
         """Chốt lại một buổi trò chuyện: tổng kết buổi + thời lượng + cập nhật Streak.
 
-        Lưu vào session_logs để Doraemon nhớ buổi trước đã làm gì và tính chuỗi
+        Lưu vào session_logs để Havs Robot nhớ buổi trước đã làm gì và tính chuỗi
         ngày học liên tiếp (Streak) nhằm khuyến khích thói quen học tập của trẻ.
         """
         with self._get_connection() as conn:
@@ -727,14 +727,14 @@ class MemoryManager:
             {
                 "id": "first_step",
                 "name": "🌱 Bước Chân Đầu Tiên",
-                "desc": "Hoàn thành buổi trò chuyện đầu tiên với Doraemon",
+                "desc": "Hoàn thành buổi trò chuyện đầu tiên với Havs Robot",
                 "icon": "🌱",
                 "unlocked": total_sessions >= 1
             },
             {
                 "id": "streak_3",
                 "name": "🔥 Chăm Chỉ 3 Ngày",
-                "desc": "Trò chuyện cùng Doraemon 3 ngày liên tiếp",
+                "desc": "Trò chuyện cùng Havs Robot 3 ngày liên tiếp",
                 "icon": "🔥",
                 "unlocked": streak_days >= 3
             },
@@ -779,7 +779,7 @@ class MemoryManager:
         elif streak_days > 0:
             advice = f"{child_name} đang duy trì thói quen học tập rất đều đặn! Hãy tiếp tục động viên bé mỗi ngày."
         else:
-            advice = f"Hãy cùng {child_name} mở Doraemon trò chuyện 5-10 phút mỗi ngày để tạo phản xạ giao tiếp tự tin nhé!"
+            advice = f"Hãy cùng {child_name} mở Havs Robot trò chuyện 5-10 phút mỗi ngày để tạo phản xạ giao tiếp tự tin nhé!"
 
         return {
             "child_id": child_id,
@@ -854,7 +854,7 @@ class MemoryManager:
                 "emoji": "🐾",
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
-                "description": f"Cùng Doraemon khám phá những bí mật siêu đáng yêu về {fav_animal}!",
+                "description": f"Cùng Havs Robot khám phá những bí mật siêu đáng yêu về {fav_animal}!",
                 "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: Thế giới loài {fav_animal} (sở thích của bé). Hãy kể một chi tiết bất ngờ về {fav_animal} trong 1-2 câu như đang cùng xem, rồi để bé tự hỏi tiếp. Không đố, không kiểm tra.]"
             })
         elif hobbies:
@@ -866,7 +866,7 @@ class MemoryManager:
                 "emoji": "🎨",
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
-                "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Doraemon!",
+                "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Havs Robot!",
                 "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: {hobby_0} (sở thích của bé). Hãy hào hứng hỏi bé thích nhất điều gì ở {hobby_0} và kể một trải nghiệm tưởng tượng ngắn. Không đố.]"
             })
         else:

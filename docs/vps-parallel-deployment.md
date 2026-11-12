@@ -7,12 +7,12 @@ Tài liệu này ghi lại cấu hình đang chạy thực tế ngày 2026-10-22
 
 | Project | Thư mục | Runtime | Cổng nội bộ | Cổng công khai | URL chính |
 | --- | --- | --- | --- | --- | --- |
-| human-digital (Doraemon) | `/opt/human-digital` | Docker Compose service `backend` | `8000` | `8000`, `80` | `http://103.20.102.229/` |
+| human-digital (Havs Robot) | `/opt/human-digital` | Docker Compose service `backend` | `8000` | `8000`, `80` | `http://103.20.102.229/` |
 | havsAI | `/opt/havs-ai` | systemd `havs-ai` (Node) | `3000` | `8080`, `443` | `https://103-20-102-229.sslip.io/` |
 
 - human-digital dùng Docker volume `human-digital_app_data` cho `/app/data`.
 - havsAI dùng SQLite tại `/opt/havs-ai/fullstack/data/havs.db`.
-- Android Doraemon mặc định gọi `ws://103.20.102.229/ws/live` (port 80), nên
+- Android Havs Robot mặc định gọi `ws://103.20.102.229/ws/live` (port 80), nên
   **Nginx port 80 phải tiếp tục trỏ về human-digital**.
 - TWA havsAI dùng `https://103-20-102-229.sslip.io`; assetlinks được phục vụ tại
   `/.well-known/assetlinks.json`.
@@ -130,7 +130,7 @@ certbot renew --dry-run --no-random-sleep-on-renew
    - `/opt/havs-ai/fullstack/.env`
 5. Không đổi port nội bộ `8000`/`3000` nếu chưa sửa đồng thời compose/systemd và
    Nginx.
-6. Android Doraemon hardcode URL backend. Nếu đổi domain/port, phải sửa
+6. Android Havs Robot hardcode URL backend. Nếu đổi domain/port, phải sửa
    `android/.../MainActivity.kt` và build lại APK, hoặc đổi URL trong màn hình
    Setup của app.
 

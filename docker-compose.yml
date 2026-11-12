@@ -1,4 +1,4 @@
-# Havs Robot (Doraemon English Buddy) — chạy trên VPS qua vps-panel.
+# Havs Robot — chạy trên VPS qua vps-panel.
 # Panel tự thêm mapping 127.0.0.1:<cổng nội bộ>:1406, nên KHÔNG khai báo ports.
 
 services:

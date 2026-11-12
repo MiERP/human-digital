@@ -441,7 +441,7 @@ fun DashboardTab(digest: DailyDigestData?, onRefresh: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("💡", fontSize = 18.sp)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Lời Nhắn Sư Phạm Của Doraemon", fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), fontSize = 14.sp)
+                    Text("Lời Nhắn Sư Phạm Của Havs Robot", fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), fontSize = 14.sp)
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(

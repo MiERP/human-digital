@@ -42,7 +42,7 @@ class AudioPlayer(
         // Chu kỳ chờ xả sạch phần cứng sau khi nhận turn_complete từ server (~100ms).
         private const val HARDWARE_DRAIN_CYCLES = 10
 
-        // Khuếch đại âm lượng phát lại: 1.8x để giọng Doraemon to rõ nhưng không bị méo tiếng.
+        // Khuếch đại âm lượng phát lại: 1.8x để giọng Havs Robot to rõ nhưng không bị méo tiếng.
         private const val VOLUME_GAIN = 1.8f
 
         // Đủ chỗ cho một câu chuyện dài 1-2 phút mà không cắt ngang.
@@ -155,7 +155,7 @@ class AudioPlayer(
                         written = audioTrack?.write(gainedChunk, 0, gainedChunk.size) ?: 0
                     }
 
-                    // Tính biên độ âm lượng nhép môi Doraemon
+                    // Tính biên độ âm lượng nhép môi Havs Robot
                     val amplitude = calculateRMS(chunk)
                     onOutputAmplitude(amplitude)
                 } else {

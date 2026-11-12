@@ -16,7 +16,7 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.Executors
 
 /**
- * Quản lý "Đôi Mắt Cảm Xúc" (Edge AI Emotional Vision) của Doraemon:
+ * Quản lý "Đôi Mắt Cảm Xúc" (Edge AI Emotional Vision) của Havs Robot:
  * - Chạy ngầm phân tích khuôn mặt bé qua Camera trước bằng Google ML Kit.
  * - Xử lý 100% CỤC BỘ trên chip máy, KHÔNG gửi bất kỳ hình ảnh nào qua mạng (COPPA/GDPR).
  * - Tần số phân tích: 4 FPS (250ms / frame) với độ trễ phản hồi < 1.0 giây.
@@ -24,7 +24,7 @@ import java.util.concurrent.Executors
  *   + super_happy: Cười lớn, rạng rỡ, thích thú
  *   + happy: Mỉm cười, vui vẻ, tươi tắn
  *   + curious: Nghiêng đầu tò mò, suy nghĩ
- *   + attentive: Nhìn thẳng, chăm chú lắng nghe Doraemon
+ *   + attentive: Nhìn thẳng, chăm chú lắng nghe Havs Robot
  *   + focused: Cúi đầu tập trung nhìn sách/bài tập
  *   + distracted: Quay đầu nhìn quanh, lơ đãng
  *   + sleepy: Mắt nhắm li bì, buồn ngủ

@@ -67,7 +67,7 @@ class _TTLCache:
 
 class KnowledgeSearchEngine:
     """
-    Unified search interface for Doraemon's Encyclopedia Mode.
+    Unified search interface for Havs Robot's Encyclopedia Mode.
 
     Output contract (always):
         {
@@ -96,7 +96,7 @@ class KnowledgeSearchEngine:
         "&format=json&limit=5&search={query}"
     )
     USER_AGENT = (
-        "DoraemonKidEducationBot/2.0 (Educational AI Tutor for Kids; "
+        "Havs RobotKidEducationBot/2.0 (Educational AI Tutor for Kids; "
         "contact: admin@human-digital.local)"
     )
 
@@ -118,7 +118,7 @@ class KnowledgeSearchEngine:
     def _cache_key(self, query: str, topic_hint: Optional[str], child_id: str = "default_child") -> str:
         """Cache key includes topic_hint + child_id so identical queries never
         collide across different hints or different children. This keeps child
-        data isolated (each child has their own Doraemon memory)."""
+        data isolated (each child has their own Havs Robot memory)."""
         norm = self._normalize_query(query)
         hint = (topic_hint or "").strip().lower()
         child = child_id.strip().lower() or "default_child"
@@ -299,7 +299,7 @@ class KnowledgeSearchEngine:
                 "source_backend": backend_used,
                 "is_blocked": False,
                 "safe_message": (
-                    f"Doraemon không tìm thấy thông tin về '{query}'. "
+                    f"Havs Robot không tìm thấy thông tin về '{query}'. "
                     "Bạn thử hỏi cách khác xem sao?"
                 ),
                 "query": query,
@@ -324,7 +324,7 @@ class KnowledgeSearchEngine:
         """Loại bỏ các từ hỏi tự nhiên và dấu câu để trích xuất thực thể chính cho Wikipedia / Search API."""
         q = query.strip()
         patterns = [
-            r"^(ai là|ai sinh ra|ai lập nên|ai sáng lập|kể về|kể cho em về|kể cho bé về|giải thích về|giải thích|cho mình hỏi về|cho em hỏi về|đố doraemon biết|bạn có biết|bạn biết gì về|nguồn gốc của|lịch sử của|thông tin về|tìm hiểu về|hãy nói về|có bao nhiêu|bao nhiêu|việt nam có bao nhiêu|tại sao|vì sao)\s+",
+            r"^(ai là|ai sinh ra|ai lập nên|ai sáng lập|kể về|kể cho em về|kể cho bé về|giải thích về|giải thích|cho mình hỏi về|cho em hỏi về|đố (?:doraemon|havs robot|robot) biết|bạn có biết|bạn biết gì về|nguồn gốc của|lịch sử của|thông tin về|tìm hiểu về|hãy nói về|có bao nhiêu|bao nhiêu|việt nam có bao nhiêu|tại sao|vì sao)\s+",
             r"\s+(là ai|ở đâu|vào năm nào|sinh năm bao nhiêu|như thế nào|tại sao|để làm gì|là gì|có gì đặc biệt|có bao nhiêu|gồm những gì|gồm những ai|gồm mấy loại|thế nào)\s*[\?\!\.]*$",
         ]
         cleaned = q

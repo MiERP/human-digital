@@ -13,7 +13,7 @@ Bao gồm hơn 100 chủ đề vàng:
 
 Mỗi mục gồm:
 - 'vi': Bản tóm tắt tiếng Việt thân thiện, giàu hình ảnh, dễ hiểu (3-5 câu).
-- 'en': Bản tiếng Anh ngắn gọn giúp Doraemon sprinkle từ vựng song ngữ.
+- 'en': Bản tiếng Anh ngắn gọn giúp Havs Robot sprinkle từ vựng song ngữ.
 - 'category': Phân loại chủ đề.
 - 'key_figures': Danh sách từ khóa đối sánh thực thể.
 """
@@ -848,7 +848,7 @@ CURATED_KNOWLEDGE: Dict[str, Dict[str, any]] = {
         "vi": (
             "Trí tuệ nhân tạo (AI - Artificial Intelligence) là công nghệ mô phỏng trí thông minh của con người trên máy tính, "
             "giúp máy tính có thể tự học, suy nghĩ, nhận diện hình ảnh, hiểu giọng nói và trò chuyện như một người bạn. "
-            "Doraemon cũng là một người bạn Trí tuệ Nhân tạo thông minh luôn đồng hành cùng các bé khám phá thế giới!"
+            "Havs Robot cũng là một người bạn Trí tuệ Nhân tạo thông minh luôn đồng hành cùng các bé khám phá thế giới!"
         ),
         "en": (
             "Artificial Intelligence (AI) enables computers and machines to learn, recognize patterns, understand human speech, and solve problems creatively."
@@ -893,7 +893,7 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
             fig_raw = fig.lower()
             fig_norm = _strip_vietnamese_diacritics(fig_raw)
             if fig_norm in q_norm or fig_raw in q_raw:
-                return (entry, key, f"Doraemon Knowledge Base: {figures[0]}")
+                return (entry, key, f"Havs Robot Knowledge Base: {figures[0]}")
 
     # 2. Quét theo slug key
     for key, entry in CURATED_KNOWLEDGE.items():
@@ -901,7 +901,7 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
         if key_clean in q_norm:
             figures = entry.get("key_figures", [])
             title = figures[0] if figures else key_clean.title()
-            return (entry, key, f"Doraemon Knowledge Base: {title}")
+            return (entry, key, f"Havs Robot Knowledge Base: {title}")
 
     # 3. Quét theo tập từ khóa (Token Subset match) cho các cụm danh từ dài
     for key, entry in CURATED_KNOWLEDGE.items():
@@ -910,6 +910,6 @@ def lookup_curated(query: str) -> Optional[Tuple[Dict[str, str], str, str]]:
             fig_norm = _strip_vietnamese_diacritics(fig.lower())
             fig_words = set(fig_norm.split())
             if len(fig_words) >= 2 and fig_words.issubset(q_words):
-                return (entry, key, f"Doraemon Knowledge Base: {figures[0]}")
+                return (entry, key, f"Havs Robot Knowledge Base: {figures[0]}")
 
     return None

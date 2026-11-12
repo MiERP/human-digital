@@ -68,7 +68,7 @@ class AudioRecorder(
         // Fallback khi Silero VAD không khởi tạo được.
         private const val RMS_FALLBACK_THRESHOLD = 0.035f
 
-        // Gia hạn echo gate sau khi Doraemon dứt lời thực tế trên loa (150ms) —
+        // Gia hạn echo gate sau khi Havs Robot dứt lời thực tế trên loa (150ms) —
         // ngắn hơn trước (450ms) để giảm dead-air nhưng vẫn đủ chống vọng phòng.
         private const val PLAYBACK_GRACE_MS = 150L
     }
@@ -218,7 +218,7 @@ class AudioRecorder(
                 onInputVolume((rawRms * 4.0f).coerceIn(0.0f, 1.0f))
 
                 val now = System.currentTimeMillis()
-                // Micro chỉ bị tắt HẲN khi đang ngủ / mất kết nối. Trong lúc Doraemon
+                // Micro chỉ bị tắt HẲN khi đang ngủ / mất kết nối. Trong lúc Havs Robot
                 // nói, mic vẫn nghe để bé có thể ngắt lời (full-duplex barge-in).
                 val micDisabled = !isMicListeningEnabled
                 if (isAssistantTurnActive && now - assistantTurnStartedAt > ASSISTANT_BUSY_TIMEOUT_MS) {

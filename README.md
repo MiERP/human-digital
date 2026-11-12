@@ -1,4 +1,4 @@
-# 🤖 Digital Human — bạn robot trò chuyện cùng trẻ (Android + Gemini Live)
+# 🤖 Havs Robot — bạn robot trò chuyện cùng trẻ (Android + Gemini Live)
 
 Dự án bạn đồng hành AI cho trẻ em từ 5–12 tuổi. Trò chuyện, lắng nghe và cùng khám phá là trải nghiệm chính; học tiếng Anh, kiến thức và kế hoạch học là tính năng phụ khi bé hoặc phụ huynh chủ động chọn. Ứng dụng tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp.
 
@@ -55,7 +55,7 @@ GOOGLE_CSE_KEY=your_api_key_here
 [Điện thoại Android (Kotlin/Compose)]
   │ • AudioRecord (16kHz PCM)
   │ • Silero VAD on-device (phát hiện nói/không nói)
-  │ • 2D Doraemon Canvas (Lip-sync real-time theo âm lượng)
+  │ • 2D Havs Robot Canvas (Lip-sync real-time theo âm lượng)
   │ • AudioTrack (24kHz PCM playback)
   │
   │ ▲ WebSocket 2 chiều (WSS)
@@ -99,17 +99,17 @@ human-digital/
             ├── network/
             │   └── GeminiLiveClient.kt # OkHttp WebSocket Client (+ clarification events)
             └── ui/
-                ├── DoraemonAvatar.kt   # Doraemon vẽ bằng Jetpack Compose
+                ├── DoraemonAvatar.kt   # Havs Robot vẽ bằng Jetpack Compose
                 └── MainActivity.kt     # ⭐ UI chính + ClarificationChipBar (Encyclopedia chip)
 ```
 
 ## 🧒 Cá nhân hóa từng bé
 
-Mỗi bé là một hồ sơ riêng (tên, tuổi, sở thích, gia đình, **tính cách**). Doraemon dùng hồ sơ này để điều chỉnh giọng điệu và cách động viên cho đúng từng bé.
+Mỗi bé là một hồ sơ riêng (tên, tuổi, sở thích, gia đình, **tính cách**). Havs Robot dùng hồ sơ này để điều chỉnh giọng điệu và cách động viên cho đúng từng bé.
 
 - Phụ huynh mở trang **`http://<backend>:8000/config`**, nhập `ADMIN_API_KEY` + `child_id`, điền hồ sơ và bấm **Lưu**.
 - Android app truyền `child_id` qua WebSocket URL (`ws://<backend>:8000/ws/live?child_id=...`) để gắn đúng hồ sơ.
-- Trường `personality` (tính cách / phong cách giao tiếp) được đưa vào system prompt để Doraemon "hiểu" bé.
+- Trường `personality` (tính cách / phong cách giao tiếp) được đưa vào system prompt để Havs Robot "hiểu" bé.
 
 ## 🎤 Lưu ý VAD on-device
 
