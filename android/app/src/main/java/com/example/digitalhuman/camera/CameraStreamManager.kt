@@ -17,7 +17,7 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
 /**
- * Quản lý CameraX và trích xuất khung hình JPEG thời gian thực cho "Mắt Thần Havs Robot":
+ * Quản lý CameraX và trích xuất khung hình JPEG thời gian thực cho "Mắt Thần Doraemon":
  * - Độ phân giải tối ưu: ~512x512 px (tối ưu hóa độ trễ và băng thông mạng).
  * - Điều tiết tốc độ khung hình (Throttle): đúng 1 khung hình/giây (1 FPS) theo chuẩn Google Gemini Live API.
  * - Hỗ trợ lật camera Trước (Selfie) / Sau (Soi bài tập, đồ vật, tranh vẽ).

@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,10 +50,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
@@ -60,12 +64,16 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.core.content.ContextCompat
 import com.example.digitalhuman.audio.AudioPlayer
+import com.example.digitalhuman.R
 import com.example.digitalhuman.audio.AudioRecorder
+import com.example.digitalhuman.audio.OpeningGreetingGate
 import com.example.digitalhuman.network.ConnectionState
 import com.example.digitalhuman.network.GeminiLiveClient
 import com.example.digitalhuman.network.ProfileApi
 import com.example.digitalhuman.network.DiscoveryTopic
 import com.example.digitalhuman.network.RobotEmotion
+import com.example.digitalhuman.network.CompanionInfo
+import com.example.digitalhuman.network.mergeCompanionName
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
@@ -127,8 +135,8 @@ fun displayHostFromWsUrl(wsUrl: String): String {
 class MainActivity : ComponentActivity() {
 
     companion object {
-        // Mặc định ban đầu nếu chưa có trong SharedPreferences
-        private const val DEFAULT_SERVER_WS_URL = "ws://192.168.0.3:8000/ws/live"
+        // Mặc định ban đầu nếu chưa có trong SharedPreferences (Trỏ thẳng vào VPS 103.20.102.229)
+        private const val DEFAULT_SERVER_WS_URL = "ws://103.20.102.229/ws/live"
 
         // SharedPreferences keys
         const val PREFS_NAME = "robo_setup_prefs"
@@ -137,6 +145,13 @@ class MainActivity : ComponentActivity() {
         private const val KEY_SERVER_WS_URL = "server_ws_url"
         const val KEY_GEMINI_API_KEY = "gemini_api_key"
         const val KEY_EMOTION_VISION_ENABLED = "emotion_vision_enabled"
+        // Nhân vật đồng hành đã chọn (cache để hiển thị đúng tên/màu khi chưa kết nối).
+        const val KEY_COMPANION_ID = "companion_id"
+        const val KEY_COMPANION_NAME = "companion_name"
+        const val KEY_COMPANION_GENDER = "companion_gender"
+        const val KEY_COMPANION_VOICE = "companion_voice"
+        const val KEY_COMPANION_PALETTE = "companion_palette"
+        const val KEY_COMPANION_ACCESSORY = "companion_accessory"
     }
 
     /**
@@ -154,7 +169,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
+        volumeControlStream = android.media.AudioManager.STREAM_VOICE_CALL
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val localSetupDone = prefs.getBoolean(KEY_SETUP_DONE, false)
@@ -212,7 +227,12 @@ fun AppRoot(
     var isSubmitting by remember { mutableStateOf(false) }
     var submitError by remember { mutableStateOf<String?>(null) }
     var showServerConfigDialog by remember { mutableStateOf(false) }
+    var showParentZoneDialog by remember { mutableStateOf(false) }
     var retryTrigger by remember { mutableStateOf(0) }
+    val companionPrefs = remember {
+        context.getSharedPreferences(MainActivity.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    }
+    var selectedCompanion by remember { mutableStateOf(loadCachedCompanion(companionPrefs)) }
 
     val profileApi = remember(serverUrl) { ProfileApi(serverUrl) }
 
@@ -229,6 +249,14 @@ fun AppRoot(
                 onSetupDone()
             }
             isCheckingBackend = false
+        } else {
+            val chosen = withContext(Dispatchers.IO) {
+                profileApi.getSelectedCompanion(childId)
+            }
+            if (chosen != null) {
+                selectedCompanion = chosen
+                saveCachedCompanion(companionPrefs, chosen)
+            }
         }
     }
 
@@ -253,17 +281,34 @@ fun AppRoot(
         )
     }
 
+    if (showParentZoneDialog) {
+        ParentZoneDialog(
+            childId = childId,
+            serverUrl = serverUrl,
+            onDismiss = { showParentZoneDialog = false },
+            onProfileUpdated = {
+                retryTrigger++
+            }
+        )
+    }
+
     if (setupDone) {
         TutorScreen(
             serverUrl = serverUrl,
             apiKey = customApiKey,
             childId = childId,
+            initialCompanion = selectedCompanion,
             onOpenServerConfig = { showServerConfigDialog = true },
-            onResetSetup = {
+            onOpenParentZone = { showParentZoneDialog = true },
+            onResetSetup = { pin ->
                 scope.launch {
-                    withContext(Dispatchers.IO) { profileApi.resetSetup(childId) }
-                    setupDone = false
-                    onSetupReset()
+                    val ok = withContext(Dispatchers.IO) { profileApi.resetSetup(childId, pin) }
+                    if (ok) {
+                        setupDone = false
+                        onSetupReset()
+                    } else {
+                        Toast.makeText(context, "PIN không đúng hoặc không kết nối được máy chủ.", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         )
@@ -272,12 +317,15 @@ fun AppRoot(
             SetupScreen(
                 serverUrl = serverUrl,
                 onOpenServerConfig = { showServerConfigDialog = true },
-                onComplete = { name, age, gender, hobbies, personality ->
+                onComplete = { name, age, gender, hobbies, personality, parentPin, companionPersona, companionName, companionGender ->
                     isSubmitting = true
                     submitError = null
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) {
-                            profileApi.submitSetup(childId, name, age, gender, hobbies, personality)
+                            profileApi.submitSetup(
+                                childId, name, age, gender, hobbies, personality, parentPin,
+                                companionPersona, companionName, companionGender
+                            )
                         }
                         if (ok) {
                             setupDone = true
@@ -555,13 +603,15 @@ fun TutorScreen(
     serverUrl: String,
     apiKey: String,
     childId: String,
+    initialCompanion: CompanionInfo = CompanionInfo(),
     onOpenServerConfig: () -> Unit = {},
-    onResetSetup: () -> Unit = {},
+    onOpenParentZone: () -> Unit = {},
+    onResetSetup: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Havs Robot ngủ 120s chờ wake word; hết giờ không ai gọi → thoát app hoàn toàn.
+    // Doraemon ngủ 120s chờ wake word; hết giờ không ai gọi → thoát app hoàn toàn.
     val SLEEP_TIMEOUT_MS = 120_000L
     val TAG = "TutorScreen"
 
@@ -569,12 +619,27 @@ fun TutorScreen(
     var robotAmplitude by remember { mutableFloatStateOf(0f) }
     var userVolume by remember { mutableFloatStateOf(0f) }
     var isSessionActive by remember { mutableStateOf(false) }
+    var sessionEndPending by remember { mutableStateOf(false) }
+
+    // Bảo vệ khởi tạo audio bất đồng bộ: nếu bé dừng phiên ngay lập tức,
+    // coroutine đang khởi tạo sẽ không bật lại micro.
+    val audioSessionLifecycle = remember { com.example.digitalhuman.audio.AudioSessionLifecycle() }
+    val interruptionGate = remember { com.example.digitalhuman.audio.InterruptionGate() }
 
     // Đồng hồ ngủ: sau session_ended, đếm 120s chờ wake word rồi thoát app.
     var sleepJob by remember { mutableStateOf<Job?>(null) }
 
-    // Trạng thái cảm xúc + năng lượng của Havs Robot (do backend EmotionEngine đẩy về).
+    // Trạng thái cảm xúc + năng lượng của Doraemon (do backend EmotionEngine đẩy về).
     var robotEmotion by remember { mutableStateOf(RobotEmotion()) }
+
+    // Bản sắc nhân vật đồng hành (tên/giới tính/bảng màu). Khởi tạo từ cache cục bộ,
+    // cập nhật lại khi backend gửi gói "ready".
+    val companionPrefs = remember {
+        context.getSharedPreferences(MainActivity.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    }
+    var companionInfo by remember { mutableStateOf(initialCompanion) }
+    LaunchedEffect(initialCompanion) { companionInfo = initialCompanion }
+    val currentChosenCompanion by rememberUpdatedState(initialCompanion)
 
     // Encyclopedia Mode: state cho chip bar hỏi chủ đề
     var clarificationRequest by remember { mutableStateOf<ClarificationRequest?>(null) }
@@ -594,13 +659,10 @@ fun TutorScreen(
     var showSettingsMenu by remember { mutableStateOf(false) }
     // Xác nhận reset cấu hình (chống bé bấm nhầm khi đang chơi)
     var showResetConfirm by remember { mutableStateOf(false) }
-
-    // Chiếc Túi Thần Kỳ - Menu Thẻ Chủ Đề Khám Phá ⭐
-    var showTopicSheet by remember { mutableStateOf(false) }
-    var discoveryTopics by remember { mutableStateOf<List<DiscoveryTopic>>(emptyList()) }
-    var isLoadingTopics by remember { mutableStateOf(false) }
+    var resetPin by remember { mutableStateOf("") }
 
     var audioRecorderRef by remember { mutableStateOf<AudioRecorder?>(null) }
+    val openingGreetingGate = remember { OpeningGreetingGate() }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     // Helper an toàn đảm bảo mọi thay đổi Compose State đều diễn ra trên Main (UI) Thread
@@ -612,15 +674,53 @@ fun TutorScreen(
         }
     }
 
-    fun loadDiscoveryTopics() {
-        isLoadingTopics = true
-        scope.launch(Dispatchers.IO) {
-            val api = ProfileApi(serverUrl)
-            val list = api.getDiscoveryTopics(childId)
-            runOnMain {
-                discoveryTopics = list
-                isLoadingTopics = false
+    fun finishSessionAfterPlayback() {
+        if (!sessionEndPending) return
+        sessionEndPending = false
+        isSessionActive = false
+        clarificationRequest = null
+        activeLearningCue = null
+        openingGreetingGate.stopSession()
+        connectionState = ConnectionState.SLEEPING
+        audioRecorderRef?.isMicListeningEnabled = false
+        sleepJob?.cancel()
+        sleepJob = scope.launch {
+            delay(SLEEP_TIMEOUT_MS)
+            Log.i(TAG, "Companion slept ${SLEEP_TIMEOUT_MS}ms — exiting app.")
+            (context as? Activity)?.finishAndRemoveTask()
+        }
+    }
+
+    fun setSpeakerphoneRouting(enable: Boolean) {
+        try {
+            val audioManager = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+            if (enable) {
+                audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    val speakerDevice = audioManager.availableCommunicationDevices.firstOrNull {
+                        it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                    }
+                    if (speakerDevice != null) {
+                        audioManager.setCommunicationDevice(speakerDevice)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        audioManager.isSpeakerphoneOn = true
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = true
+                }
+            } else {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    audioManager.clearCommunicationDevice()
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = false
+                }
+                audioManager.mode = android.media.AudioManager.MODE_NORMAL
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Speakerphone routing error: ${e.message}")
         }
     }
 
@@ -628,23 +728,33 @@ fun TutorScreen(
     val audioPlayer = remember {
         AudioPlayer(
             onOutputAmplitude = { amp ->
+                // Đồng bộ với thread ghi âm ngay, trước khi main thread vẽ UI.
+                audioRecorderRef?.updatePlaybackAmplitude(amp)
                 runOnMain {
                     robotAmplitude = amp
                 }
             },
             onPlaybackStateChanged = { isPlaying ->
+                if (isPlaying) {
+                    openingGreetingGate.onPlaybackStarted()
+                    audioRecorderRef?.isPlaybackActive = true
+                } else {
+                    openingGreetingGate.onPlaybackFinished()
+                    audioRecorderRef?.onPlaybackFinished()
+                }
                 runOnMain {
                     if (isPlaying) {
-                        audioRecorderRef?.isPlaybackActive = true
-                        if (isSessionActive && connectionState != ConnectionState.SPEAKING && connectionState != ConnectionState.SLEEPING) {
+                        if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                             connectionState = ConnectionState.SPEAKING
-                            audioRecorderRef?.isMicListeningEnabled = false
+                            // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                         }
                     } else {
-                        audioRecorderRef?.onPlaybackFinished()
-                        if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
+                        if (sessionEndPending) {
+                            finishSessionAfterPlayback()
+                        } else if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                             connectionState = ConnectionState.LISTENING
-                            audioRecorderRef?.isMicListeningEnabled = true
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                         }
                     }
                 }
@@ -652,18 +762,49 @@ fun TutorScreen(
         )
     }
 
+    // Định danh phần cứng bất biến cho thiết bị (Hardware Fingerprint)
+    val deviceFingerprint = remember {
+        val aid = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "default_aid"
+        val raw = "${aid}_${android.os.Build.MANUFACTURER}_${android.os.Build.MODEL}"
+        try {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(raw.toByteArray(Charsets.UTF_8))
+            digest.fold("") { str, it -> str + "%02x".format(it) }
+        } catch (e: Exception) {
+            raw.replace(" ", "_")
+        }
+    }
+    val deviceModel = remember { "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}" }
+    val androidVersion = remember { "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})" }
+    var bannedMessageDialog by remember { mutableStateOf<String?>(null) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(context, "Cần cho phép thông báo để nhận lời nhắc giờ học.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     // Khởi tạo Client WebSocket
-    val client = remember(serverUrl, childId, apiKey) {
+    val client = remember(serverUrl, childId, apiKey, deviceFingerprint) {
         GeminiLiveClient(
             serverUrl = serverUrl,
             childId = childId,
             apiKey = apiKey,
+            deviceFingerprint = deviceFingerprint,
+            deviceModel = deviceModel,
+            androidVersion = androidVersion,
             onAudioReceived = { audioBytes ->
+                // Đẩy audio vào hàng đợi ngay trên thread mạng; chỉ cập nhật UI trên main.
+                // Trước đây mọi chunk đều đi qua main thread nên UI bận là audio bị dồn.
+                audioPlayer.enqueueAudio(audioBytes)
+                if (audioPlayer.isPlayingOrPending) {
+                    audioRecorderRef?.onPlaybackChunkReceived()
+                }
                 runOnMain {
                     connectionState = ConnectionState.SPEAKING
-                    audioRecorderRef?.isMicListeningEnabled = false
-                    audioRecorderRef?.onPlaybackChunkReceived()
-                    audioPlayer.enqueueAudio(audioBytes)
+                    // GIỮ micro mở trong lúc phát để bé có thể ngắt lời (barge-in).
+                    audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                 }
             },
             onStateChanged = { newState ->
@@ -671,26 +812,32 @@ fun TutorScreen(
                     when (newState) {
                         ConnectionState.CONNECTED -> {
                             connectionState = ConnectionState.LISTENING
-                            audioRecorderRef?.isMicListeningEnabled = true
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                         }
                         ConnectionState.SLEEPING -> {
-                            connectionState = ConnectionState.SLEEPING
+                            audioRecorderRef?.onAssistantTurnFinished()
                             audioRecorderRef?.isMicListeningEnabled = false
+                            if (!audioPlayer.isPlayingOrPending) {
+                                connectionState = ConnectionState.SLEEPING
+                            }
                         }
                         ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
                             connectionState = newState
+                            audioRecorderRef?.onAssistantTurnFinished()
                             audioRecorderRef?.isMicListeningEnabled = false
+                            if (isSessionActive) openingGreetingGate.startSession()
                         }
                         ConnectionState.LISTENING -> {
                             if (!audioPlayer.isPlayingOrPending && isSessionActive && connectionState != ConnectionState.SLEEPING) {
                                 connectionState = ConnectionState.LISTENING
-                                audioRecorderRef?.isMicListeningEnabled = true
+                                audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                             }
                         }
                         ConnectionState.SPEAKING -> {
                             if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
                                 connectionState = ConnectionState.SPEAKING
-                                audioRecorderRef?.isMicListeningEnabled = false
+                                // Giữ mic mở để hỗ trợ ngắt lời (barge-in).
+                                audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                             }
                         }
                         else -> Unit
@@ -699,9 +846,12 @@ fun TutorScreen(
             },
             onInterrupted = {
                 runOnMain {
-                    audioPlayer.stopAndFlush()
-                    connectionState = ConnectionState.LISTENING
-                    audioRecorderRef?.isMicListeningEnabled = true
+                    audioRecorderRef?.onAssistantTurnFinished()
+                    if (interruptionGate.shouldFlushOnServerInterruption()) {
+                        audioPlayer.beginInterruption()
+                        connectionState = ConnectionState.LISTENING
+                    }
+                    audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                 }
             },
             onEmotionChanged = { emotion ->
@@ -709,21 +859,31 @@ fun TutorScreen(
                     robotEmotion = emotion
                 }
             },
+            onInputRecognized = {
+                runOnMain {
+                    if (isSessionActive && connectionState == ConnectionState.LISTENING && !audioPlayer.isPlayingOrPending) {
+                        connectionState = ConnectionState.THINKING
+                    }
+                }
+            },
             onSessionEnded = {
                 runOnMain {
                     audioRecorderRef?.stopRecording()
-                    audioPlayer.stopAndFlush()
-                    isSessionActive = false
-                    sleepJob?.cancel()
-                    sleepJob = scope.launch {
-                        delay(SLEEP_TIMEOUT_MS)
-                        Log.i(TAG, "Havs Robot slept ${SLEEP_TIMEOUT_MS}ms — exiting app.")
-                        (context as? Activity)?.finishAndRemoveTask()
+                    sessionEndPending = true
+                    if (!audioPlayer.isPlayingOrPending) {
+                        finishSessionAfterPlayback()
                     }
                 }
             },
             onTurnComplete = {
                 runOnMain {
+                    audioRecorderRef?.onAssistantTurnFinished()
+                    if (!audioPlayer.isPlayingOrPending) {
+                        openingGreetingGate.onTurnCompleteWithoutAudio()
+                        if (isSessionActive && connectionState != ConnectionState.SLEEPING) {
+                            audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
+                        }
+                    }
                     audioPlayer.notifyTurnComplete()
                 }
             },
@@ -738,6 +898,44 @@ fun TutorScreen(
                 runOnMain {
                     if (mastered.isNotEmpty() || practice.isNotEmpty()) {
                         activeLearningCue = LearningWordCue(topic, mastered, practice)
+                    }
+                }
+            },
+            onDeviceBanned = { reason ->
+                runOnMain {
+                    isSessionActive = false
+                    audioRecorderRef?.stopRecording()
+                    audioPlayer.stopAndFlush()
+                    bannedMessageDialog = reason
+                }
+            },
+            onCompanionReady = { companion ->
+                runOnMain {
+                    val selected = mergeCompanionName(currentChosenCompanion, companion)
+                    companionInfo = selected
+                    saveCachedCompanion(companionPrefs, selected)
+                }
+            },
+            onPlanUpdated = { payload ->
+                runOnMain {
+                    try {
+                        val plan = org.json.JSONObject(payload).optJSONObject("plan")
+                        if (plan != null) {
+                            if (!plan.optBoolean("is_active", true) || !plan.optBoolean("reminder_enabled", true)) {
+                                ReminderScheduler.cancel(context)
+                            } else {
+                                val days = plan.optJSONArray("days")
+                                val weekdays = if (days != null) (0 until days.length()).map { days.optString(it) } else emptyList()
+                                ReminderScheduler.schedule(context, weekdays, plan.optString("start_time", "19:00"), companionInfo.name)
+                                if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not schedule updated learning plan", e)
                     }
                 }
             }
@@ -758,13 +956,12 @@ fun TutorScreen(
 
     // Quản lý "Đôi Mắt Cảm Xúc" (Edge AI ML Kit Face Detection chạy ngầm Camera trước)
     val faceEmotionManager = remember(client) {
-        FaceEmotionManager(context = context) { emotion, confidence ->
+        FaceEmotionManager(context = context) { emotion, _ ->
             childDetectedEmotion = emotion
-            client.sendChildEmotion(emotion, confidence)
         }
     }
 
-    // Quản lý CameraX streaming 1 FPS cho "Mắt Thần Havs Robot" (Cloud Multimodal)
+    // Quản lý CameraX streaming 1 FPS cho "Mắt Thần Doraemon" (Cloud Multimodal)
     val cameraStreamManager = remember(client) {
         CameraStreamManager(context = context) { jpegBytes ->
             client.sendVideoFrame(jpegBytes)
@@ -777,9 +974,9 @@ fun TutorScreen(
     ) { isGranted ->
         if (isGranted) {
             isCameraActive = true
-            Toast.makeText(context, "👁️ Đã bật Mắt Thần! Hãy giơ tranh vẽ hoặc đồ vật cho Havs Robot xem nhé!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "👁️ Đã bật Mắt Thần! Hãy giơ tranh vẽ hoặc đồ vật cho ${companionInfo.name} xem nhé!", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "Cần cấp quyền Camera để Havs Robot có thể nhìn thấy đồ vật/bài tập của bé!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Cần cấp quyền Camera để ${companionInfo.name} có thể nhìn thấy đồ vật/bài tập của bé!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -824,28 +1021,85 @@ fun TutorScreen(
                 }
             },
             onSpeechStarted = {
+                // Manual VAD gửi ranh giới ngay trước pre-roll; hybrid backend cũ bỏ qua.
                 client.notifyActivityStart()
                 runOnMain {
+                    // Bé đã lên tiếng: chip hỏi lại của lượt trước không còn giá trị.
+                    clarificationRequest = null
                     if (connectionState == ConnectionState.SPEAKING || audioPlayer.isPlayingOrPending) {
-                        // Barge-in: bé nói xen vào khi Havs Robot đang phát âm thanh -> dừng phát tức thì
-                        audioPlayer.stopAndFlush()
+                        // Barge-in: bé nói xen vào khi Doraemon đang phát -> dừng phát tức thì
+                        // và bỏ luôn các chunk của lượt cũ còn đang bay tới.
+                        interruptionGate.onLocalInterruption()
+                        audioPlayer.beginInterruption()
                     }
                     if (connectionState != ConnectionState.SLEEPING) {
                         connectionState = ConnectionState.LISTENING
-                        audioRecorderRef?.isMicListeningEnabled = true
+                        audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                     }
                 }
             },
             onSpeechEnded = {
+                // Manual VAD chốt lượt; hybrid backend cũ vẫn dùng audio_stream_end.
                 client.notifyActivityEnd()
+                client.notifyAudioStreamEnd()
                 runOnMain {
                     if (connectionState != ConnectionState.SLEEPING) {
-                        connectionState = ConnectionState.THINKING
-                        audioRecorderRef?.isMicListeningEnabled = false
+                        connectionState = ConnectionState.LISTENING
+                        // Giữ mic mở để bé vẫn có thể ngắt lời khi Doraemon trả lời.
+                        audioRecorderRef?.isMicListeningEnabled = openingGreetingGate.allowMic
                     }
                 }
             }
         ).also { audioRecorderRef = it }
+    }
+
+    fun startSession() {
+        sessionEndPending = false
+        isSessionActive = true
+        audioRecorder.onAssistantTurnFinished()
+        clarificationRequest = null
+        activeLearningCue = null
+        interruptionGate.reset()
+        openingGreetingGate.startSession()
+        setSpeakerphoneRouting(true)
+        val generation = audioSessionLifecycle.begin()
+        audioRecorder.isMicListeningEnabled = openingGreetingGate.allowMic
+        // AudioTrack + model VAD Silero được khởi tạo trên IO: trước đây chúng
+        // chạy trên main thread nên lần bấm đầu tiên bị khựng UI.
+        scope.launch(Dispatchers.IO) {
+            audioSessionLifecycle.start(
+                generation,
+                onStart = {
+                    audioPlayer.start(scope)
+                    audioRecorder.startRecording(scope)
+                },
+                onStop = {
+                    audioRecorder.stopRecording()
+                    audioPlayer.stopAndFlush()
+                },
+            )
+        }
+        client.beginNewSession()
+        client.connect()
+    }
+
+    fun stopSession() {
+        val generation = audioSessionLifecycle.end()
+        sessionEndPending = false
+        isSessionActive = false
+        clarificationRequest = null
+        activeLearningCue = null
+        openingGreetingGate.stopSession()
+        isCameraActive = false
+        audioRecorder.isMicListeningEnabled = false
+        scope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+            audioSessionLifecycle.stop(generation) {
+                audioRecorder.stopRecording()
+                audioPlayer.stopAndFlush()
+            }
+        }
+        client.disconnect()
+        setSpeakerphoneRouting(false)
     }
 
     // Permission launcher cho Micro & Camera
@@ -853,12 +1107,9 @@ fun TutorScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            isSessionActive = true
-            audioPlayer.start(scope)
-            client.connect()
-            audioRecorder.startRecording(scope)
+            startSession()
         } else {
-            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với Havs Robot!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với ${companionInfo.name}!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -867,9 +1118,7 @@ fun TutorScreen(
             sleepJob?.cancel()
             faceEmotionManager.release()
             cameraStreamManager.release()
-            audioRecorder.stopRecording()
-            audioPlayer.release()
-            client.disconnect()
+            stopSession()
         }
     }
 
@@ -879,7 +1128,7 @@ fun TutorScreen(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF38BDF8), // Xanh da trời Havs Robot tươi sáng
+                        Color(0xFF38BDF8), // Xanh da trời Doraemon tươi sáng
                         Color(0xFF0284C7),
                         Color(0xFFBAE6FD)  // Xanh mây nhạt ấm áp
                     )
@@ -889,79 +1138,90 @@ fun TutorScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // 1. Header Bầu trời, Chỉ Báo Minh Bạch Camera & Menu Phụ Huynh
-        Row(
+        // 1. Header Bầu trời: tên, trạng thái camera và cài đặt cùng một hàng.
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // Huy hiệu Havs Robot vui nhộn
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            // Huy hiệu cùng nhân vật với icon ứng dụng và màn trò chuyện.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color.White.copy(alpha = 0.25f))
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Text("🐱", fontSize = 16.sp)
+                Image(
+                    painter = painterResource(R.drawable.robo_launcher),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp).clip(CircleShape),
+                )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "HAVS ROBOT",
+                    text = companionInfo.name.uppercase(),
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 1.sp
+                    letterSpacing = 1.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
             }
 
-            // CHỈ BÁO MINH BẠCH: "Đôi Mắt Cảm Xúc" (Hiển thị khi Camera trước đang cảm nhận bé)
             if (isSessionActive && isEmotionVisionEnabled && !isCameraActive) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Color.White.copy(alpha = 0.35f))
-                        .clickable { showPrivacyInfoDialog = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    // Chấm xanh bảo mật phát sáng (Privacy Green Dot)
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF10B981))
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = when (childDetectedEmotion) {
-                            "happy" -> "😊 Bé đang vui"
-                            "confused" -> "🤔 Đang suy nghĩ"
-                            "sleepy" -> "🌙 Buồn ngủ"
-                            "focused" -> "✍️ Tập trung"
-                            "distracted" -> "👀 Nhìn quanh"
-                            "no_face" -> "👁️ Tìm bé..."
-                            else -> "👁️ Đang ngắm bé"
-                        },
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+              Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                      .padding(start = 8.dp)
+                      .clip(RoundedCornerShape(20.dp))
+                      .background(Color.White.copy(alpha = 0.35f))
+                      .clickable { showPrivacyInfoDialog = true }
+                      .padding(horizontal = 10.dp, vertical = 6.dp)
+              ) {
+                  Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                      text = when (childDetectedEmotion) {
+                          "super_happy" -> "😆 Vui"
+                          "happy" -> "😊 Vui"
+                          "curious" -> "🤔 Tò mò"
+                          "attentive" -> "👀 Đang nghe"
+                          "focused" -> "👀 Tập trung"
+                          "distracted" -> "🎈 Nhìn quanh"
+                          "sleepy" -> "🌙 Buồn ngủ"
+                          "no_face" -> "🔍 Tìm bé..."
+                          else -> "👀 Đang nghe"
+                      },
+                      color = Color.White,
+                      fontSize = 11.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                  )
+              }
             }
 
-            // Nút Cài Đặt Dành Cho Phụ Huynh (Nhỏ gọn, kín đáo)
             Box(
                 modifier = Modifier
-                    .size(38.dp)
+                    .padding(start = 8.dp)
+                    .size(34.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.25f))
                     .clickable { showSettingsMenu = true },
                 contentAlignment = Alignment.Center
             ) {
-                Text("⚙️", fontSize = 16.sp)
+                Text("⚙️", fontSize = 15.sp)
             }
+          }
         }
 
         // Dialog Giải Thích Quyền Riêng Tư khi chạm vào Chỉ Báo Camera
@@ -969,13 +1229,13 @@ fun TutorScreen(
             AlertDialog(
                 onDismissRequest = { showPrivacyInfoDialog = false },
                 title = {
-                    Text("🔒 Đôi Mắt Havs Robot & Quyền Riêng Tư", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+                    Text("🔒 Đôi Mắt ${companionInfo.name} & Quyền Riêng Tư", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
                 },
                 containerColor = Color(0xFF0F172A),
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "Havs Robot đang sử dụng Camera trước để quan sát nụ cười và cảm xúc của bé, giúp bạn robot trò chuyện thấu cảm và thân thiện hơn.",
+                            text = "${companionInfo.name} đang sử dụng Camera trước để quan sát nụ cười và cảm xúc của bé, giúp bạn robot trò chuyện thấu cảm và thân thiện hơn.",
                             fontSize = 13.sp,
                             color = Color(0xFFE2E8F0)
                         )
@@ -1007,6 +1267,44 @@ fun TutorScreen(
             )
         }
 
+        // Dialog Thông Báo Thiết Bị Bị Tạm Khóa (Hardware Ban Notice)
+        if (bannedMessageDialog != null) {
+            AlertDialog(
+                onDismissRequest = { bannedMessageDialog = null },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🚫", fontSize = 22.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Tạm Dừng Kết Nối", fontWeight = FontWeight.Bold, color = Color(0xFFEF4444), fontSize = 16.sp)
+                    }
+                },
+                containerColor = Color(0xFF1E1B4B),
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = bannedMessageDialog ?: "Thiết bị này đã bị tạm dừng kết nối bởi Quản trị viên hệ thống.",
+                            fontSize = 13.sp,
+                            color = Color(0xFFE2E8F0)
+                        )
+                        Text(
+                            text = "💡 Mã phần cứng: ${deviceFingerprint.take(16)}...",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { bannedMessageDialog = null },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                    ) {
+                        Text("Đã hiểu", color = Color.White)
+                    }
+                }
+            )
+        }
+
         // Dialog Menu Tùy Chọn khi ấn nút ⚙
         if (showSettingsMenu) {
             AlertDialog(
@@ -1015,6 +1313,18 @@ fun TutorScreen(
                 containerColor = Color(0xFF0F172A),
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = {
+                                showSettingsMenu = false
+                                onOpenParentZone()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("👨‍👩‍👧 Góc Phụ Huynh", color = Color.White)
+                        }
+
                         // Nút Bật/Tắt Đôi Mắt Cảm Xúc
                         Button(
                             onClick = {
@@ -1081,11 +1391,23 @@ fun TutorScreen(
                 onDismissRequest = { showResetConfirm = false },
                 containerColor = Color(0xFF0F172A),
                 title = { Text("Cấu hình lại hồ sơ bé?", fontWeight = FontWeight.Bold, color = Color.White) },
-                text = { Text("Màn hình cấu hình tên, tuổi, sở thích sẽ hiện lại. Dữ liệu trò chuyện hiện tại vẫn được giữ.", color = Color(0xFFCBD5E1)) },
+                text = {
+                    Column {
+                        Text("Màn hình cấu hình sẽ hiện lại. Dữ liệu trò chuyện vẫn được giữ. Nhập PIN phụ huynh để xác nhận.", color = Color(0xFFCBD5E1))
+                        OutlinedTextField(
+                            value = resetPin,
+                            onValueChange = { resetPin = it },
+                            label = { Text("PIN phụ huynh") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                        )
+                    }
+                },
                 confirmButton = {
                     TextButton(onClick = {
                         showResetConfirm = false
-                        onResetSetup()
+                        onResetSetup(resetPin)
+                        resetPin = ""
                     }) {
                         Text("Cấu hình lại", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold)
                     }
@@ -1098,18 +1420,19 @@ fun TutorScreen(
             )
         }
 
-        // 2. Khu vực trung tâm: Havs Robot bồng bềnh + Khung Gương Mắt Thần
+        // 2. Khu vực trung tâm: Doraemon bồng bềnh + Khung Gương Mắt Thần
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
             contentAlignment = Alignment.Center
         ) {
-            // Havs Robot Avatar 2D sống động với biểu cảm và hào quang
-            DoraemonAvatar(
+            // Avatar nhân vật đồng hành 2D sống động với biểu cảm và hào quang
+            CompanionAvatar(
                 state = connectionState,
                 amplitude = robotAmplitude,
                 emotion = robotEmotion,
+                companion = companionInfo,
             )
 
             // Thẻ Từ Vựng Học Tập Nổi Bật (Visual Learning Flashcard Overlay)
@@ -1201,23 +1524,31 @@ fun TutorScreen(
             }
         }
 
-        // 3. Khung Thoại Manga Hoạt Hình (Comic Speech Bubble)
-        MangaSpeechBubble(
-            text = getDoraemonSpeechText(connectionState, robotEmotion, isSessionActive, childDetectedEmotion),
-            state = connectionState,
-            emotion = robotEmotion
-        )
-
-        // 4. Chip bar cho Encyclopedia / Socratic Mode (khi có gợi ý chủ đề)
-        clarificationRequest?.let { req ->
-            Spacer(modifier = Modifier.height(10.dp))
-            ClarificationChipBar(
-                request = req,
-                onChoiceSelected = { choice ->
-                    client.sendClarificationResponse(choice)
-                    clarificationRequest = null
-                }
+        // 3. Trạng thái gọn: không dùng câu thoại mẫu dài.
+        if (isSessionActive) {
+            CompanionStatusPill(state = connectionState)
+        } else {
+            Text(
+                text = "Chạm Chuông Vàng để bắt đầu",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.2.sp
             )
+        }
+
+        // 4. Chip chọn chủ đề khi câu hỏi cần làm rõ — chỉ trong phiên đang mở.
+        if (isSessionActive) {
+            clarificationRequest?.let { req ->
+                Spacer(modifier = Modifier.height(10.dp))
+                ClarificationChipBar(
+                    request = req,
+                    onChoiceSelected = { choice ->
+                        client.sendClarificationResponse(choice)
+                        clarificationRequest = null
+                    }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -1225,9 +1556,9 @@ fun TutorScreen(
         // 5. Thanh Điều Khiển Bảo Bối & Nút Chuông Vàng ở chân trang
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             // Nút Bật/Tắt Gương Mắt Thần 📷
             Box(
                 modifier = Modifier
@@ -1266,6 +1597,7 @@ fun TutorScreen(
                     )
                 }
             }
+            }
 
             // NÚT CHUÔNG VÀNG THẦN KỲ (MAGIC BELL MIC) Ở TRUNG TÂM
             MagicBellButton(
@@ -1276,10 +1608,7 @@ fun TutorScreen(
                 onClick = {
                     if (connectionState == ConnectionState.SLEEPING) {
                         client.wakeUp()
-                        isSessionActive = true
-                        audioPlayer.start(scope)
-                        client.connect()
-                        audioRecorder.startRecording(scope)
+                        startSession()
                     } else if (!isSessionActive) {
                         val hasPermission = ContextCompat.checkSelfPermission(
                             context,
@@ -1287,196 +1616,132 @@ fun TutorScreen(
                         ) == PackageManager.PERMISSION_GRANTED
 
                         if (hasPermission) {
-                            isSessionActive = true
-                            audioPlayer.start(scope)
-                            client.connect()
-                            audioRecorder.startRecording(scope)
+                            startSession()
                         } else {
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     } else {
-                        isSessionActive = false
-                        isCameraActive = false
-                        audioRecorder.stopRecording()
-                        audioPlayer.stopAndFlush()
-                        client.disconnect()
+                        stopSession()
                     }
                 }
             )
 
-            // Nút Khám Phá Chủ Đề / Gợi Ý Vui Nhộn ⭐
-            Box(
-                modifier = Modifier
-                    .size(58.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.9f))
-                    .border(
-                        width = 2.dp,
-                        color = Color(0xFFF472B6),
-                        shape = CircleShape
-                    )
-                    .clickable {
-                        loadDiscoveryTopics()
-                        showTopicSheet = true
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(text = "⭐", fontSize = 20.sp)
-                    Text(
-                        text = "Khám phá",
-                        fontSize = 8.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFDB2777)
-                    )
-                }
-            }
+            Spacer(modifier = Modifier.weight(1f))
         }
 
         Spacer(modifier = Modifier.height(10.dp))
     }
 
-    // Modal Chiếc Túi Thần Kỳ 🎒 - Menu Thẻ Chủ Đề Khám Phá Động
-    if (showTopicSheet) {
-        TopicDiscoveryModal(
-            topics = discoveryTopics,
-            isLoading = isLoadingTopics,
-            onDismiss = { showTopicSheet = false },
-            onRefresh = { loadDiscoveryTopics() },
-            onTopicSelected = { topic ->
-                showTopicSheet = false
-                if (!isSessionActive) {
-                    isSessionActive = true
-                    audioPlayer.start(scope)
-                    client.connect()
-                    audioRecorder.startRecording(scope)
-                }
-                client.selectTopic(topic.title, topic.promptHint)
-            }
-        )
-    }
 }
 
 /**
- * Tạo văn bản động cho khung thoại Manga theo trạng thái và cảm xúc của Havs Robot.
+ * Tạo văn bản động cho khung thoại Manga theo trạng thái và cảm xúc của Doraemon.
  */
-private fun getDoraemonSpeechText(
-    state: ConnectionState,
-    emotion: RobotEmotion,
-    isSessionActive: Boolean,
-    childEmotion: String = "neutral"
-): String {
-    if (!isSessionActive) {
-        return "Chào bạn nhỏ! Hãy chạm vào Chuông Vàng để chúng mình cùng trò chuyện và khám phá nhé! ✨"
+/** Đọc nhân vật đồng hành đã cache để hiển thị đúng tên/màu trước khi kết nối. */
+private fun loadCachedCompanion(prefs: android.content.SharedPreferences): CompanionInfo {
+    val name = prefs.getString(MainActivity.KEY_COMPANION_NAME, null)
+    if (name.isNullOrBlank() || name.equals("null", ignoreCase = true)) {
+        return CompanionInfo(name = "Bạn Robot")
     }
-    if (state == ConnectionState.LISTENING) {
-        return when (childEmotion) {
-            "happy" -> "Havs Robot thấy bé đang cười vui lắm nè! Kể cho mình nghe với nha! 😊✨"
-            "confused" -> "Đừng lo nhé, có Havs Robot ở đây rồi! Có câu hỏi nào khó cứ hỏi mình nha! 💡"
-            "sleepy" -> "Bé ơi, bé có thấy mệt không? Cứ thoải mái tâm sự với Havs Robot nhé! 🌙"
-            "focused" -> "Bé đang chăm chú làm bài ghê! Havs Robot luôn ở bên cạnh bé nè! ✍️"
-            else -> "Havs Robot đang chăm chú lắng nghe bé nói nè! Hãy nói gì đó với mình nhé! 👂"
-        }
-    }
-    return when (state) {
-        ConnectionState.SLEEPING -> "Khò khò... Havs Robot đang ngủ một lát. Chúc bé ngủ ngon nha! Zzz... 🌙"
-        ConnectionState.THINKING -> "Aha, câu hỏi hay quá! Havs Robot đang suy nghĩ câu trả lời cho bạn nhỏ nè... 🤔💡"
-        ConnectionState.SPEAKING -> {
-            when (emotion.emotion) {
-                "excited" -> "Woohoo! Tuyệt vời quá bé ơi! Cùng Havs Robot khám phá tiếp nào! 🎉"
-                "proud" -> "Bé thông minh và giỏi quá! Havs Robot tự hào về bé lắm! 🌟"
-                "surprised" -> "Ôi ngạc nhiên chưa! Havs Robot vừa học thêm một điều thú vị từ bé đấy! 😮"
-                "displeased" -> "Hừm, bé trêu Havs Robot đấy à? Đùa xíu thôi, Havs Robot thương bé nhất! 😋"
-                "sad" -> "Đừng buồn nhé, có Havs Robot luôn ở bên cạnh bé nè! Cố lên nào! ❤️"
-                else -> "Havs Robot đang kể cho bé nghe nè, bé lắng nghe nhé! 💬"
-            }
-        }
-        ConnectionState.CONNECTING -> "Đang mở Cửa Thần Kỳ kết nối đến thế giới tương lai... 🚀"
-        ConnectionState.ERROR -> "Ôi Cửa Thần Kỳ bị nghẽn một chút, bé thử chạm lại Chuông Vàng nhé! 🔧"
-        else -> "Havs Robot sẵn sàng rồi! Chúng mình cùng học tiếng Anh và khám phá khoa học nha! 🎈"
-    }
+    val paletteRaw = prefs.getString(MainActivity.KEY_COMPANION_PALETTE, null)
+    val palette = paletteRaw?.split("|")?.filter { it.isNotBlank() } ?: emptyList()
+    return CompanionInfo(
+        id = prefs.getString(MainActivity.KEY_COMPANION_ID, "boy_blue") ?: "boy_blue",
+        name = name,
+        gender = prefs.getString(MainActivity.KEY_COMPANION_GENDER, "male") ?: "male",
+        voice = prefs.getString(MainActivity.KEY_COMPANION_VOICE, "Puck") ?: "Puck",
+        palette = palette.ifEmpty { listOf("#0288D1", "#4FC3F7", "#FFD54F") },
+        accessory = prefs.getString(MainActivity.KEY_COMPANION_ACCESSORY, "cap") ?: "cap",
+    )
+}
+
+/** Lưu nhân vật đồng hành vào cache cục bộ. */
+private fun saveCachedCompanion(prefs: android.content.SharedPreferences, companion: CompanionInfo) {
+    prefs.edit()
+        .putString(MainActivity.KEY_COMPANION_ID, companion.id)
+        .putString(MainActivity.KEY_COMPANION_NAME, companion.name)
+        .putString(MainActivity.KEY_COMPANION_GENDER, companion.gender)
+        .putString(MainActivity.KEY_COMPANION_VOICE, companion.voice)
+        .putString(MainActivity.KEY_COMPANION_PALETTE, companion.palette.joinToString("|"))
+        .putString(MainActivity.KEY_COMPANION_ACCESSORY, companion.accessory)
+        .apply()
 }
 
 /**
- * Khung thoại phong cách Manga hoạt hình (Comic Speech Bubble).
+ * Pill trạng thái gọn thay cho bong bóng thoại mẫu.
+ * Chỉ một nhãn ngắn + chấm màu; trạng thái "đang nói" có equalizer nhỏ.
  */
 @Composable
-fun MangaSpeechBubble(
-    text: String,
+fun CompanionStatusPill(
     state: ConnectionState,
-    emotion: RobotEmotion,
     modifier: Modifier = Modifier
 ) {
-    val isThinking = state == ConnectionState.THINKING
-    val isExcited = emotion.emotion == "excited" || emotion.emotion == "proud"
-
-    val infiniteTransition = rememberInfiniteTransition(label = "thinking_anim")
-    val thinkingAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1.0f,
+    val (label, color) = when (state) {
+        ConnectionState.CONNECTING -> "Đang kết nối" to Color(0xFF93C5FD)
+        ConnectionState.LISTENING -> "Đang nghe" to Color(0xFF34D399)
+        ConnectionState.THINKING -> "Đang nghĩ" to Color(0xFFFBBF24)
+        ConnectionState.SPEAKING -> "Đang nói" to Color(0xFF38BDF8)
+        ConnectionState.SLEEPING -> "Đang nghỉ" to Color(0xFF94A3B8)
+        ConnectionState.ERROR -> "Mất kết nối" to Color(0xFFF87171)
+        else -> "Sẵn sàng" to Color(0xFFE0F2FE)
+    }
+    val isBusy = state == ConnectionState.THINKING
+    val transition = rememberInfiniteTransition(label = "status_pulse")
+    val pulse by transition.animateFloat(
+        initialValue = if (isBusy) 0.35f else 0.7f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(600, easing = FastOutSlowInEasing),
+            animation = tween(700, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "thinking_glow"
+        label = "status_alpha"
     )
 
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.18f))
+            .border(1.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Thân bong bóng thoại bo tròn hoạt hình
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(Color.White.copy(alpha = 0.95f))
-                .border(
-                    width = if (isThinking) 2.5.dp else 2.dp,
-                    color = if (isExcited) Color(0xFFF472B6)
-                            else if (isThinking) Color(0xFFFBBF24).copy(alpha = thinkingAlpha)
-                            else Color(0xFF38BDF8),
-                    shape = RoundedCornerShape(22.dp)
-                )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = pulse))
+        )
+        Spacer(modifier = Modifier.width(7.dp))
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.2.sp
+        )
+        if (state == ConnectionState.SPEAKING) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = text,
-                    color = Color(0xFF0F172A),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 20.sp,
-                    textAlign = TextAlign.Center
-                )
-                if (isThinking) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        repeat(3) { index ->
-                            val dotAlpha by infiniteTransition.animateFloat(
-                                initialValue = 0.2f,
-                                targetValue = 1.0f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(450, delayMillis = index * 150, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "dot_$index"
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .padding(horizontal = 3.dp)
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFF59E0B).copy(alpha = dotAlpha))
-                            )
-                        }
-                    }
+                listOf(5.dp, 9.dp, 6.dp).forEachIndexed { index, barHeight ->
+                    val barScale by transition.animateFloat(
+                        initialValue = 0.35f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(420, delayMillis = index * 90, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "status_bar_$index"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(2.dp)
+                            .height(barHeight * barScale)
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(color.copy(alpha = 0.9f))
+                    )
                 }
             }
         }
@@ -1526,7 +1791,7 @@ fun MagicBellButton(
             )
         }
 
-        // Quả Chuông Vàng Havs Robot 3D
+        // Quả Chuông Vàng Doraemon 3D
         Box(
             modifier = Modifier
                 .size(76.dp)
@@ -1647,7 +1912,7 @@ data class LearningWordCue(
 )
 
 /**
- * Thẻ từ vựng bảo bối nổi bật trên màn hình khi Havs Robot sửa lỗi hoặc ghi nhận từ mới (Multimodal Visual Scaffolding).
+ * Thẻ từ vựng bảo bối nổi bật trên màn hình khi Doraemon sửa lỗi hoặc ghi nhận từ mới (Multimodal Visual Scaffolding).
  */
 @Composable
 fun LearningWordBadgeOverlay(
@@ -1754,6 +2019,7 @@ fun LearningWordBadgeOverlay(
 fun TopicDiscoveryModal(
     topics: List<DiscoveryTopic>,
     isLoading: Boolean,
+    companionName: String,
     onDismiss: () -> Unit,
     onRefresh: () -> Unit,
     onTopicSelected: (DiscoveryTopic) -> Unit
@@ -1801,7 +2067,7 @@ fun TopicDiscoveryModal(
                                     color = Color(0xFF0284C7)
                                 )
                                 Text(
-                                    text = "Bé muốn cùng Havs Robot khám phá gì nào?",
+                                    text = "Bé muốn cùng $companionName khám phá gì nào?",
                                     fontSize = 11.sp,
                                     color = Color(0xFF64748B)
                                 )
@@ -1834,7 +2100,7 @@ fun TopicDiscoveryModal(
                                 CircularProgressIndicator(color = Color(0xFF0284C7))
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Text(
-                                    text = "Havs Robot đang mở túi thần kỳ... ✨",
+                                    text = "$companionName đang mở túi thần kỳ... ✨",
                                     fontSize = 12.sp,
                                     color = Color(0xFF0284C7),
                                     fontWeight = FontWeight.Medium

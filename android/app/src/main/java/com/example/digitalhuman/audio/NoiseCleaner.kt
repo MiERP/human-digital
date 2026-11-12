@@ -39,6 +39,10 @@ class NoiseCleaner {
     private var windowMin = Float.MAX_VALUE
     private var windowFrames = 0
 
+    /** Mức nhiễu nền ước lượng gần nhất, dùng để chặn onset giả từ im lặng. */
+    val noiseFloorRms: Float
+        get() = noiseFloor
+
     /**
      * Lọc frame in-place (high-pass Butterworth 200Hz để khử DC và tiếng gió sub-rumble).
      * Trả về RMS của frame sau lọc. Không can thiệp zero-out thô bạo để giữ trọn vẹn

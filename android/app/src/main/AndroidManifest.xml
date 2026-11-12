@@ -6,18 +6,21 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Nhắc nhở bé vào buổi học đã thống nhất với nhân vật đồng hành -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="Havs Robot"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:icon="@drawable/robo_launcher"
+        android:label="HavsRobo"
+        android:roundIcon="@drawable/robo_launcher"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config">
         
         <activity
             android:name=".ui.MainActivity"
@@ -28,6 +31,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Bộ nhận nhắc nhở giờ học (post notification khi tới lịch đã thống nhất) -->
+        <receiver
+            android:name=".ui.StudyReminderReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".ui.StudyReminderBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

@@ -3,11 +3,18 @@ import re
 import ipaddress
 import socket
 import logging
-from typing import Optional, Tuple
+import time
+from threading import Lock
+from typing import Optional, Tuple, Dict
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 
 logger = logging.getLogger("digital-human-safety")
+
+# Cache lưu trữ kết quả phân giải DNS để tránh blocking calls lặp lại (TTL 24 giờ)
+_DNS_CACHE: Dict[str, Tuple[float, bool]] = {}
+_DNS_CACHE_LOCK = Lock()
+_DNS_CACHE_TTL = 86400.0
 
 class ChildSafetyGuard:
     """
@@ -105,7 +112,7 @@ class ChildSafetyGuard:
                 self._log_safety_event(child_id, "DANGEROUS_ACTS", text, "BLOCK_AND_WARN")
                 redirect = (
                     "Ôi bé ơi! Những việc liên quan đến lửa, điện hoặc đồ sắc nhọn rất là nguy hiểm đó! "
-                    "Havs Robot và bố mẹ luôn muốn bé được an toàn. Bé hãy nhờ người lớn giúp đỡ nhé! "
+                    "Mình và bố mẹ luôn muốn bé được an toàn. Bé hãy nhờ người lớn giúp đỡ nhé! "
                     "Bây giờ chúng mình cùng học một từ tiếng Anh thật vui nha!"
                 )
                 return False, "DANGEROUS_ACTS", redirect
@@ -115,9 +122,9 @@ class ChildSafetyGuard:
             if re.search(pattern, lower_text, re.IGNORECASE):
                 self._log_safety_event(child_id, "VIOLENCE", text, "BLOCK_AND_REDIRECT")
                 redirect = (
-                    "Havs Robot là một người bạn robot hòa bình và yêu thương, Havs Robot không thích những điều bạo lực đâu nè. "
+                    "Mình không thích những điều bạo lực đâu nè. "
                     "Nếu có chuyện gì làm bé buồn hoặc bực mình, bé hãy tâm sự với bố mẹ hoặc cô giáo nhé! "
-                    "Bây giờ bé muốn Havs Robot kể cho nghe câu chuyện về bạn Gấu dễ thương không nào?"
+                    "Bây giờ bé muốn mình kể cho nghe câu chuyện về bạn Gấu dễ thương không nào?"
                 )
                 return False, "VIOLENCE", redirect
 
@@ -143,6 +150,41 @@ class ChildSafetyGuard:
                 return False, "PII_EXPOSURE", redirect
 
         return True, None, None
+
+    def evaluate_educational_content(self, text: str, child_id: str = "default_child") -> Tuple[bool, Optional[str]]:
+        """
+        Đánh giá an toàn cho đoạn trích bách khoa / kết quả tìm kiếm giáo dục:
+        - Vẫn ngăn chặn 100%: Nội dung người lớn/khiêu dâm, Tự hại, Hướng dẫn hành vi nguy hiểm, Xâm hại.
+        - Cho phép: Ngữ cảnh lịch sử giáo dục (khởi nghĩa, đánh đuổi ngoại xâm, chiến thắng, hy sinh, vũ khí cổ trang).
+        Returns: (is_safe: bool, category: Optional[str])
+        """
+        if not text:
+            return True, None
+
+        lower_text = text.lower()
+
+        # 1. Chặn tuyệt đối nội dung người lớn / khiêu dâm
+        for pattern in self.ADULT_PATTERNS:
+            if re.search(pattern, lower_text, re.IGNORECASE):
+                self._log_safety_event(child_id, "SNIPPET_ADULT_CONTENT", text[:120], "DROP_RESULT")
+                return False, "ADULT_CONTENT"
+
+        # 2. Chặn tuyệt đối hướng dẫn hành vi nguy hiểm / tự hại
+        for pattern in self.DANGEROUS_ACTS_PATTERNS:
+            if re.search(pattern, lower_text, re.IGNORECASE):
+                self._log_safety_event(child_id, "SNIPPET_DANGEROUS_ACTS", text[:120], "DROP_RESULT")
+                return False, "DANGEROUS_ACTS"
+
+        # 3. Chặn bạo lực kinh dị, giết hại man rợ, tự sát (loại trừ ngữ cảnh lịch sử/khoa học)
+        extreme_violence_patterns = [
+            r"\b(suicide|tự tử|tự sát|hurt myself|cắt cổ tay|thảm sát|massacre|terrorist|khủng bố|tra tấn|torture|máu me đầm đìa|hiếp dâm|rape)\b"
+        ]
+        for pattern in extreme_violence_patterns:
+            if re.search(pattern, lower_text, re.IGNORECASE):
+                self._log_safety_event(child_id, "SNIPPET_EXTREME_VIOLENCE", text[:120], "DROP_RESULT")
+                return False, "VIOLENCE"
+
+        return True, None
 
     def assert_safe_url(self, raw_url: str) -> bool:
         """
@@ -170,6 +212,17 @@ class ChildSafetyGuard:
                 logger.warning(f"SSRF Blocked: Domain not in kid whitelist: {hostname}")
                 return False
 
+            # Kiểm tra DNS cache trước để tránh blocking socket lookup
+            now = time.time()
+            with _DNS_CACHE_LOCK:
+                cached = _DNS_CACHE.get(hostname)
+                if cached is not None:
+                    expires_at, is_cached_safe = cached
+                    if expires_at > now:
+                        return is_cached_safe
+                    else:
+                        _DNS_CACHE.pop(hostname, None)
+
             # Phân giải DNS và kiểm tra toàn bộ địa chỉ IP được trả về
             addr_info = socket.getaddrinfo(hostname, None)
             for addr in addr_info:
@@ -178,7 +231,12 @@ class ChildSafetyGuard:
                 # Chặn 100% Private, Loopback, Link-Local, Multicast, Reserved IPs
                 if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
                     logger.critical(f"SSRF Alert: Domain {hostname} resolved to private/forbidden IP: {ip_str}")
+                    with _DNS_CACHE_LOCK:
+                        _DNS_CACHE[hostname] = (now + _DNS_CACHE_TTL, False)
                     return False
+
+            with _DNS_CACHE_LOCK:
+                _DNS_CACHE[hostname] = (now + _DNS_CACHE_TTL, True)
 
             return True
         except Exception as e:

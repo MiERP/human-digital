@@ -1,5 +1,5 @@
 # Havs Robot (Doraemon English Buddy) — chạy trên VPS qua vps-panel.
-# Panel tự thêm mapping 127.0.0.1:<cổng nội bộ>:1709, nên KHÔNG khai báo ports.
+# Panel tự thêm mapping 127.0.0.1:<cổng nội bộ>:1406, nên KHÔNG khai báo ports.
 
 services:
   app:
@@ -16,10 +16,10 @@ services:
     environment:
       ENV: production
       HOST: 0.0.0.0
-      PORT: "1709"
+      PORT: "1406"
 
       # CORS/WebSocket cho tên miền thật
-      ALLOWED_ORIGINS: https://havs-robot.103-20-102-229.sslip.io,http://127.0.0.1:1709
+      ALLOWED_ORIGINS: https://havs-robot.103-20-102-229.sslip.io,http://127.0.0.1:1406
 
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-native-audio-latest}
       GEMINI_VOICE: ${GEMINI_VOICE:-Aoede}

@@ -1,9 +1,14 @@
 import os
 import json
 import sqlite3
+import secrets
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from contextlib import contextmanager
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone, date, timedelta
+
+from personas import normalize_gender, resolve_persona
 
 logger = logging.getLogger("digital-human-memory")
 
@@ -27,13 +32,18 @@ class MemoryManager:
         self.db_path = db_path
         self._init_database()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_connection(self):
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         # Kích hoạt WAL mode để tối ưu đọc/ghi đồng thời
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_database(self):
         """Khởi tạo cấu trúc bảng cơ sở dữ liệu nếu chưa tồn tại"""
@@ -57,10 +67,15 @@ class MemoryManager:
                     hobbies TEXT,     -- JSON array: ["drawing", "swimming", "dinosaurs"]
                     learning_level TEXT DEFAULT 'Starters',
                     personality TEXT, -- Mô tả tính cách / phong cách giao tiếp của bé
+                    parent_pin TEXT DEFAULT '1234', -- Mã PIN 4 số bảo vệ Góc Phụ Huynh trên thiết bị
                     profile_completed INTEGER DEFAULT 0, -- 1 khi phụ huynh đã điền xong màn setup
                     streak_days INTEGER DEFAULT 0,       -- Chuỗi ngày học liên tiếp (Gamification)
                     last_active_date TEXT,               -- Ngày học gần nhất (YYYY-MM-DD)
                     total_sessions_count INTEGER DEFAULT 0, -- Tổng số phiên trò chuyện
+                    companion_persona TEXT,              -- ID nhân vật đồng hành bé đã chọn (xem personas.py)
+                    companion_name TEXT,                 -- Tên nhân vật do phụ huynh/bé tự đặt
+                    companion_gender TEXT,               -- Giới tính nhân vật: male | female
+                    companion_voice TEXT,                -- Ghi đè giọng đọc (Gemini prebuilt voice)
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -71,6 +86,8 @@ class MemoryManager:
             existing_columns = {row["name"] for row in cursor.fetchall()}
             if "personality" not in existing_columns:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN personality TEXT;")
+            if "parent_pin" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN parent_pin TEXT DEFAULT '1234';")
             if "gender" not in existing_columns:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN gender TEXT;")
             if "profile_completed" not in existing_columns:
@@ -81,6 +98,14 @@ class MemoryManager:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN last_active_date TEXT;")
             if "total_sessions_count" not in existing_columns:
                 cursor.execute("ALTER TABLE child_profile ADD COLUMN total_sessions_count INTEGER DEFAULT 0;")
+            if "companion_persona" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN companion_persona TEXT;")
+            if "companion_name" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN companion_name TEXT;")
+            if "companion_gender" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN companion_gender TEXT;")
+            if "companion_voice" not in existing_columns:
+                cursor.execute("ALTER TABLE child_profile ADD COLUMN companion_voice TEXT;")
 
             # 2. Bảng kỷ niệm thường ngày (Episodic Memories)
             cursor.execute("""
@@ -125,6 +150,60 @@ class MemoryManager:
                 );
             """)
 
+            # 5. Bảng đăng ký thiết bị & quản lý khóa chặn phần cứng (Device Registry & Ban Engine)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS device_registry (
+                    device_fingerprint TEXT PRIMARY KEY,
+                    child_id TEXT NOT NULL,
+                    device_model TEXT,
+                    android_version TEXT,
+                    app_version TEXT,
+                    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_ip TEXT,
+                    is_blocked INTEGER DEFAULT 0,
+                    block_reason TEXT,
+                    total_sessions INTEGER DEFAULT 0,
+                    total_duration_sec INTEGER DEFAULT 0
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_dev_child ON device_registry(child_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_dev_blocked ON device_registry(is_blocked);")
+
+            # 6. Bảng kế hoạch học tập đã thống nhất giữa robot và bé (Learning Plan)
+            # Một bé có tối đa một kế hoạch đang hoạt động. Robot thương lượng lịch
+            # với bé qua tool discuss_study_plan; phụ huynh xem/sửa trong Góc Phụ Huynh.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS learning_plan (
+                    child_id TEXT PRIMARY KEY,
+                    days TEXT,                  -- JSON array: ["mon","tue","wed","thu","fri","sat","sun"]
+                    start_time TEXT,            -- "HH:MM" giờ bắt đầu buổi học
+                    duration_minutes INTEGER DEFAULT 20,
+                    focus_topics TEXT,          -- JSON array: ["Animals","Colors"]
+                    weekly_goal TEXT,           -- Mục tiêu tuần (mô tả ngắn)
+                    reminder_enabled INTEGER DEFAULT 1,
+                    is_active INTEGER DEFAULT 1,
+                    agreed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (child_id) REFERENCES child_profile (child_id) ON DELETE CASCADE
+                );
+            """)
+
+            # 7. Nhật ký tuân thủ kế hoạch (mỗi buổi học theo lịch: done / missed / skipped)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS learning_plan_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    child_id TEXT NOT NULL,
+                    planned_date TEXT NOT NULL,   -- YYYY-MM-DD
+                    status TEXT NOT NULL,         -- done | missed | skipped
+                    duration_seconds INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (child_id) REFERENCES child_profile (child_id) ON DELETE CASCADE
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_plan_events_child ON learning_plan_events(child_id, planned_date);")
+
             conn.commit()
             logger.info(f"Child Memory database initialized at: {self.db_path}")
 
@@ -166,6 +245,7 @@ class MemoryManager:
             "name": "name",
             "nickname": "nickname",
             "age": "age",
+            "gender": "gender",
             "grade": "grade",
             "favorite_color": "favorite_color",
             "favorite_animal": "favorite_animal",
@@ -173,6 +253,9 @@ class MemoryManager:
             "favorite_character": "favorite_character",
             "learning_level": "learning_level",
             "personality": "personality",
+            "companion_name": "companion_name",
+            "companion_gender": "companion_gender",
+            "companion_persona": "companion_persona",
         }
 
         with self._get_connection() as conn:
@@ -223,7 +306,8 @@ class MemoryManager:
         scalar_fields = {
             "name", "nickname", "age", "gender", "grade", "favorite_color",
             "favorite_animal", "favorite_food", "favorite_character",
-            "learning_level", "personality",
+            "learning_level", "personality", "parent_pin",
+            "companion_persona", "companion_name", "companion_gender", "companion_voice",
         }
         self.get_or_create_profile(child_id)
 
@@ -252,6 +336,36 @@ class MemoryManager:
 
             conn.commit()
             logger.info(f"Updated profile for {child_id} from parent config.")
+            return True
+
+    # ==================== Multi-Tenant Parent PIN Security ====================
+
+    def verify_parent_pin(self, child_id: str, pin: str) -> bool:
+        """Xác thực mã PIN của phụ huynh riêng cho từng thiết bị/child_id."""
+        if not pin:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT parent_pin FROM child_profile WHERE child_id = ?;", (child_id,))
+            row = cursor.fetchone()
+            stored_pin = (row["parent_pin"] if row and row["parent_pin"] else "1234").strip()
+            return secrets.compare_digest(stored_pin, str(pin).strip())
+
+    def set_parent_pin(self, child_id: str, new_pin: str) -> bool:
+        """Cập nhật mã PIN mới cho phụ huynh trên thiết bị."""
+        clean_pin = str(new_pin).strip()
+        if len(clean_pin) < 4:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.now(timezone.utc).isoformat()
+            self.get_or_create_profile(child_id)
+            cursor.execute(
+                "UPDATE child_profile SET parent_pin = ?, updated_at = ? WHERE child_id = ?;",
+                (clean_pin, now, child_id)
+            )
+            conn.commit()
+            logger.info(f"Updated parent PIN for child [{child_id}].")
             return True
 
     # ==================== First-Run Setup Methods ====================
@@ -308,6 +422,29 @@ class MemoryManager:
                 LIMIT ?;
             """, (child_id, limit))
             return [dict(row) for row in cursor.fetchall()]
+
+    def save_shared_moment(self, child_id: str, content: str) -> Optional[int]:
+        """Lưu một sự kiện chung ngắn để nhân vật có thể nhắc lại về sau."""
+        moment = " ".join(str(content).split())[:240]
+        if not moment or re.search(
+            r"\b(?:\d{10,12}|mật khẩu|password|mã pin|số điện thoại|số tài khoản|địa chỉ nhà)\b",
+            moment, re.IGNORECASE,
+        ):
+            return None
+        self.get_or_create_profile(child_id)
+        if any(item["content"].casefold() == moment.casefold() for item in self.get_shared_moments(child_id, limit=20)):
+            return None
+        return self.add_episodic_memory(child_id, "SHARED_MOMENT", moment, importance=5)
+
+    def get_shared_moments(self, child_id: str, limit: int = 2) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT content, created_at FROM episodic_memories
+                   WHERE child_id = ? AND category = 'SHARED_MOMENT'
+                   ORDER BY id DESC LIMIT ?""",
+                (child_id, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     # ==================== Learning Progress Methods ====================
 
@@ -388,10 +525,15 @@ class MemoryManager:
     def build_memory_context(self, child_id: str = "default_child") -> str:
         """
         Tạo đoạn ngữ cảnh ngắn gọn (<250 tokens) tối ưu để nhúng vào System Prompt của Gemini Live.
-        Giúp Havs Robot nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
+        Giúp Doraemon nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
         """
         profile = self.get_or_create_profile(child_id)
-        recent_memories = self.get_recent_memories(child_id, limit=3)
+        companion_name = resolve_persona(profile)["name"]
+        recent_memories = [
+            m for m in self.get_recent_memories(child_id, limit=6)
+            if m["category"] != "SHARED_MOMENT"
+        ][:3]
+        shared_moments = self.get_shared_moments(child_id)
         learning = self.get_learning_summary(child_id)
 
         lines = [
@@ -400,7 +542,7 @@ class MemoryManager:
         ]
 
         if profile.get("gender"):
-            gender_label = "boy" if profile["gender"].lower().startswith("male") else "girl"
+            gender_label = "boy" if normalize_gender(profile["gender"]) == "male" else "girl"
             lines.append(f"- Gender: {gender_label} (use appropriate pronouns)")
 
         if profile.get("personality"):
@@ -429,29 +571,34 @@ class MemoryManager:
             lines.append(f"- Hobbies/Interests: {', '.join(hobbies)}")
 
         if recent_memories:
-            lines.append("- Recent Life Memories with Havs Robot:")
+            lines.append(f"- Recent Life Memories with {companion_name}:")
             for m in recent_memories:
                 lines.append(f"  * [{m['category']}] {m['content']}")
+
+        if shared_moments:
+            lines.append("- Những kỷ niệm chung (chỉ nhắc tự nhiên khi hợp ngữ cảnh):")
+            for moment in shared_moments:
+                lines.append(f"  * {moment['content']}")
 
         if learning:
             recent_topic = learning[0]
             if recent_topic["needs_practice"]:
-                lines.append(f"- English Practice Focus: Topic '{recent_topic['topic']}', encourage words: {', '.join(recent_topic['needs_practice'])}")
+                lines.append(f"- English Practice History (only if child chooses to practice again): Topic '{recent_topic['topic']}', words: {', '.join(recent_topic['needs_practice'])}")
 
         # Streak & Gamification context
         streak = profile.get("streak_days", 0)
         total_sessions = profile.get("total_sessions_count", 0)
         if streak > 1:
-            lines.append(f"- Streak: Bé đang có chuỗi {streak} ngày học liên tiếp! Hãy khen ngợi tinh thần chăm chỉ của bé!")
+            lines.append(f"- Streak: Bé và bạn robot đã trò chuyện {streak} ngày liên tiếp. Chỉ nhắc nếu hợp câu chuyện, không biến thành điểm học tập.")
         elif total_sessions == 0:
-            lines.append("- Session: Đây là buổi đầu tiên bé làm quen với Havs Robot. Hãy mở đầu thật hào hứng, ấm áp và thân thiện!")
+            lines.append(f"- Session: Đây là buổi đầu tiên bé làm quen với {companion_name}. Hãy mở đầu ấm áp và thân thiện!")
 
         last_session = self.get_last_session_summary(child_id)
         if last_session and last_session.get("summary"):
             lines.append(
-                "- Cuối buổi trò chuyện lần trước, Havs Robot và bé đã chốt lại: "
-                f"{last_session['summary']} "
-                "(hãy nhắc lại tự nhiên đầu buổi hôm nay như một kỷ niệm chung)."
+                f"- Buổi trước hai bạn đã nói về: {last_session['summary']} "
+                "(chỉ nhắc lại nếu bé mở đúng mạch câu chuyện đó; đừng kể lại nguyên văn, "
+                "đừng mở đầu bằng việc ôn lại bài cũ)."
             )
 
         return "\n".join(lines)
@@ -467,7 +614,7 @@ class MemoryManager:
     ) -> int:
         """Chốt lại một buổi trò chuyện: tổng kết buổi + thời lượng + cập nhật Streak.
 
-        Lưu vào session_logs để Havs Robot nhớ buổi trước đã làm gì và tính chuỗi
+        Lưu vào session_logs để Doraemon nhớ buổi trước đã làm gì và tính chuỗi
         ngày học liên tiếp (Streak) nhằm khuyến khích thói quen học tập của trẻ.
         """
         with self._get_connection() as conn:
@@ -580,14 +727,14 @@ class MemoryManager:
             {
                 "id": "first_step",
                 "name": "🌱 Bước Chân Đầu Tiên",
-                "desc": "Hoàn thành buổi trò chuyện đầu tiên với Havs Robot",
+                "desc": "Hoàn thành buổi trò chuyện đầu tiên với Doraemon",
                 "icon": "🌱",
                 "unlocked": total_sessions >= 1
             },
             {
                 "id": "streak_3",
                 "name": "🔥 Chăm Chỉ 3 Ngày",
-                "desc": "Trò chuyện cùng Havs Robot 3 ngày liên tiếp",
+                "desc": "Trò chuyện cùng Doraemon 3 ngày liên tiếp",
                 "icon": "🔥",
                 "unlocked": streak_days >= 3
             },
@@ -632,7 +779,7 @@ class MemoryManager:
         elif streak_days > 0:
             advice = f"{child_name} đang duy trì thói quen học tập rất đều đặn! Hãy tiếp tục động viên bé mỗi ngày."
         else:
-            advice = f"Hãy cùng {child_name} mở ứng dụng Havs Robot và trò chuyện 5-10 phút mỗi ngày để tạo phản xạ giao tiếp tự tin nhé!"
+            advice = f"Hãy cùng {child_name} mở Doraemon trò chuyện 5-10 phút mỗi ngày để tạo phản xạ giao tiếp tự tin nhé!"
 
         return {
             "child_id": child_id,
@@ -707,8 +854,8 @@ class MemoryManager:
                 "emoji": "🐾",
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
-                "description": f"Cùng Havs Robot khám phá những bí mật siêu đáng yêu về {fav_animal}!",
-                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: Thế giới loài {fav_animal} (sở thích của bé). Hãy mở đầu bằng một câu chào vui tươi, chia sẻ 1 bí mật bất ngờ về {fav_animal} và đố bé 1 câu hỏi gợi mở nhé!]"
+                "description": f"Cùng Doraemon khám phá những bí mật siêu đáng yêu về {fav_animal}!",
+                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: Thế giới loài {fav_animal} (sở thích của bé). Hãy kể một chi tiết bất ngờ về {fav_animal} trong 1-2 câu như đang cùng xem, rồi để bé tự hỏi tiếp. Không đố, không kiểm tra.]"
             })
         elif hobbies:
             hobby_0 = str(hobbies[0])
@@ -719,8 +866,8 @@ class MemoryManager:
                 "emoji": "🎨",
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
-                "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Havs Robot!",
-                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: {hobby_0} (sở thích của bé). Hãy mở đầu thân thiện, hỏi bé về sở thích này và đố bé một câu đố vui nhé!]"
+                "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Doraemon!",
+                "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: {hobby_0} (sở thích của bé). Hãy hào hứng hỏi bé thích nhất điều gì ở {hobby_0} và kể một trải nghiệm tưởng tượng ngắn. Không đố.]"
             })
         else:
             topics.append({
@@ -731,7 +878,7 @@ class MemoryManager:
                 "color_hex": "#F472B6",
                 "tag": "Khám phá muôn loài",
                 "description": "Giải mã sức mạnh của T-Rex bạo chúa và các loài khủng long kỷ Jura!",
-                "prompt_hint": "[Bé vừa chọn khám phá chủ đề: Khủng Long Kỷ Jura. Hãy mở đầu hào hứng, giới thiệu một sự thật kỳ thú về khủng long và đố bé một câu hỏi nhé!]"
+                "prompt_hint": "[Bé vừa chọn khám phá chủ đề: Khủng Long Kỷ Jura. Hãy hào hứng kể một sự thật kỳ thú về khủng long trong 1-2 câu, rồi hỏi bé nghĩ sao. Không đố.]"
             })
 
         # 2. Thẻ Ôn tập từ vựng thông minh (Spaced Repetition Review)
@@ -745,7 +892,7 @@ class MemoryManager:
                 "color_hex": "#38BDF8",
                 "tag": "Ôn tập từ mới",
                 "description": f"Chinh phục từ vựng '{word_target}' trong các câu chuyện kỳ thú!",
-                "prompt_hint": f"[Bé vừa chọn ôn tập từ vựng tiếng Anh '{word_target}'. Hãy tạo một câu chuyện ngắn thú vị, dạy bé cách phát âm chuẩn và khuyến khích bé nói từ '{word_target}' nhé!]"
+                "prompt_hint": f"[Bé vừa chọn ôn từ '{word_target}'. Hãy dùng từ này trong một câu chuyện ngắn thật tự nhiên, rồi rủ bé nói lại nếu bé muốn. Không kiểm tra, không chấm.]"
             })
         else:
             topics.append({
@@ -756,7 +903,7 @@ class MemoryManager:
                 "color_hex": "#38BDF8",
                 "tag": "Học từ mới",
                 "description": "Luyện phát âm chuẩn bản xứ và học các từ vựng tiếng Anh vui nhộn!",
-                "prompt_hint": "[Bé vừa chọn chủ đề: Tiếng Anh Diệu Kỳ. Hãy mở đầu bằng một câu chào tiếng Anh ấm áp, giới thiệu 1-2 từ mới dễ nhớ và rủ bé cùng đọc theo nhé!]"
+                "prompt_hint": "[Bé vừa chọn chủ đề: Tiếng Anh Diệu Kỳ. Hãy dùng 1-2 từ tiếng Anh trong một câu chuyện ngắn, rồi rủ bé nói theo nếu bé thích. Không biến thành bài học.]"
             })
 
         # 3. Thẻ Theo khung giờ trong ngày (Time-aware)
@@ -770,7 +917,7 @@ class MemoryManager:
                 "color_hex": "#FBBF24",
                 "tag": "Khởi động buổi sáng",
                 "description": "Tìm hiểu xem các bạn động vật thức dậy và ăn sáng thế nào nhé!",
-                "prompt_hint": "[Bé vừa chọn chủ đề: Chào Ngày Mới Rực Rỡ. Hãy chúc bé một buổi sáng tràn đầy năng lượng và hỏi bé đã ăn sáng món gì ngon chưa nhé!]"
+                "prompt_hint": "[Bé vừa chọn chủ đề: Chào Ngày Mới Rực Rỡ. Hãy chúc bé một buổi sáng vui vẻ và hỏi bé đã ăn sáng món gì ngon chưa. Không đố, không nhắc học.]"
             })
         elif 11 <= current_hour < 18:
             topics.append({
@@ -781,7 +928,7 @@ class MemoryManager:
                 "color_hex": "#10B981",
                 "tag": "Khoa học vui",
                 "description": "Tại sao cầu vồng có 7 màu? Tại sao lá cây lại có màu xanh?",
-                "prompt_hint": "[Bé vừa chọn chủ đề: Khoa Học Quanh Em. Hãy chia sẻ một hiện tượng tự nhiên thú vị như Cầu vồng hoặc Lá cây và đố bé giải thích nhé!]"
+                "prompt_hint": "[Bé vừa chọn chủ đề: Khoa Học Quanh Em. Hãy kể một hiện tượng tự nhiên thú vị như cầu vồng hay lá cây, rồi cùng bé đoán vì sao như hai người bạn tò mò. Không kiểm tra.]"
             })
         else:
             topics.append({
@@ -804,7 +951,7 @@ class MemoryManager:
             "color_hex": "#8B5CF6",
             "tag": "Vũ trụ & Thiên văn",
             "description": "Lái Tàu Vũ Trụ đổ bộ lên Mặt Trăng, Sao Hỏa và giải mã Hố Đen!",
-            "prompt_hint": "[Bé vừa chọn chủ đề: Du Hành Vũ Trụ. Hãy thắt dây an toàn, cùng bé bước lên Tàu Vũ Trụ bay tới Sao Hỏa và đố bé về Hệ Mặt Trời nhé!]"
+            "prompt_hint": "[Bé vừa chọn chủ đề: Du Hành Vũ Trụ. Hãy cùng bé tưởng tượng chuyến bay tới Sao Hỏa trong 1-2 câu, rồi để bé tự khám phá tiếp. Không đố.]"
         })
 
         # 5. Thẻ Tiếng Anh Nhập Vai (Roleplay Adventure)
@@ -835,7 +982,352 @@ class MemoryManager:
             "color_hex": "#06B6D4",
             "tag": "Bách khoa thiên nhiên",
             "description": "Lặn sâu ngắm Cá Voi Xanh khổng lồ và thế giới san hô rực rỡ!",
-            "prompt_hint": "[Bé vừa chọn khám phá: Đại Dương Huyền Bí. Hãy lặn sâu xuống đáy biển cùng bé, giới thiệu về Cá Voi Xanh và đố bé một câu hỏi kỳ thú nhé!]"
+            "prompt_hint": "[Bé vừa chọn khám phá: Đại Dương Huyền Bí. Hãy lặn xuống đáy biển cùng bé và kể một điều kỳ thú về Cá Voi Xanh trong 1-2 câu. Không đố.]"
         })
 
         return topics
+
+    # ==================== Learning Plan (Kế hoạch học tập) ====================
+
+    _WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+    _WEEKDAY_VN = ("Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật")
+
+    def get_learning_plan(self, child_id: str = "default_child") -> Optional[Dict[str, Any]]:
+        """Lấy kế hoạch học tập đang hoạt động của bé (nếu có)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM learning_plan WHERE child_id = ?;", (child_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            data["days"] = json.loads(data["days"]) if data.get("days") else []
+            data["focus_topics"] = json.loads(data["focus_topics"]) if data.get("focus_topics") else []
+            data["reminder_enabled"] = bool(data.get("reminder_enabled", 1))
+            data["is_active"] = bool(data.get("is_active", 1))
+            return data
+
+    def upsert_learning_plan(
+        self,
+        child_id: str,
+        days: Optional[List[str]] = None,
+        start_time: Optional[str] = None,
+        duration_minutes: Optional[int] = None,
+        focus_topics: Optional[List[str]] = None,
+        weekly_goal: Optional[str] = None,
+        reminder_enabled: Optional[bool] = None,
+        is_active: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Tạo mới hoặc cập nhật kế hoạch học tập của bé."""
+        self.get_or_create_profile(child_id)
+        clean_days = [d.strip().lower()[:3] for d in (days or []) if str(d).strip()]
+        clean_days = [d for d in clean_days if d in self._WEEKDAY_KEYS]
+        clean_topics = [str(t).strip() for t in (focus_topics or []) if str(t).strip()]
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.now(timezone.utc).isoformat()
+            cursor.execute("SELECT child_id FROM learning_plan WHERE child_id = ?;", (child_id,))
+            exists = cursor.fetchone() is not None
+            if exists:
+                cursor.execute(
+                    """
+                    UPDATE learning_plan SET
+                        days = COALESCE(?, days),
+                        start_time = COALESCE(?, start_time),
+                        duration_minutes = COALESCE(?, duration_minutes),
+                        focus_topics = COALESCE(?, focus_topics),
+                        weekly_goal = COALESCE(?, weekly_goal),
+                        reminder_enabled = COALESCE(?, reminder_enabled),
+                        is_active = COALESCE(?, is_active),
+                        updated_at = ?
+                    WHERE child_id = ?;
+                    """,
+                    (
+                        json.dumps(clean_days) if days is not None else None,
+                        start_time,
+                        duration_minutes,
+                        json.dumps(clean_topics) if focus_topics is not None else None,
+                        weekly_goal,
+                        int(reminder_enabled) if reminder_enabled is not None else None,
+                        int(is_active) if is_active is not None else None,
+                        now,
+                        child_id,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO learning_plan
+                        (child_id, days, start_time, duration_minutes, focus_topics, weekly_goal, reminder_enabled, is_active, agreed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        child_id,
+                        json.dumps(clean_days),
+                        start_time or "19:00",
+                        duration_minutes or 20,
+                        json.dumps(clean_topics),
+                        weekly_goal,
+                        int(reminder_enabled) if reminder_enabled is not None else 1,
+                        int(is_active) if is_active is not None else 1,
+                        now,
+                    ),
+                )
+            conn.commit()
+            logger.info(f"Upserted learning plan for {child_id}: days={clean_days}, time={start_time}, duration={duration_minutes}")
+
+        return self.get_learning_plan(child_id) or {}
+
+    def log_plan_event(
+        self,
+        child_id: str,
+        planned_date: str,
+        status: str = "done",
+        duration_seconds: int = 0,
+    ) -> int:
+        """Ghi nhận kết quả một buổi học theo lịch (done | missed | skipped)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO learning_plan_events (child_id, planned_date, status, duration_seconds)
+                VALUES (?, ?, ?, ?);
+                """,
+                (child_id, planned_date, status, int(duration_seconds or 0)),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_plan_adherence(self, child_id: str = "default_child", days: int = 7) -> Dict[str, Any]:
+        """Thống kê tuân thủ kế hoạch trong `days` ngày gần nhất.
+
+        Đếm số buổi học theo lịch đã hoàn thành (có session_logs hoặc event 'done')
+        so với tổng số buổi được lên lịch.
+        """
+        plan = self.get_learning_plan(child_id)
+        if not plan or not plan.get("is_active"):
+            return {"has_plan": False, "planned": 0, "done": 0, "missed": 0, "rate": 0.0}
+
+        plan_days = {d.lower()[:3] for d in (plan.get("days") or [])}
+        if not plan_days:
+            return {"has_plan": True, "planned": 0, "done": 0, "missed": 0, "rate": 0.0}
+
+        today = date.today()
+        start_day = today - timedelta(days=max(0, days - 1))
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT date(created_at) AS d FROM session_logs WHERE child_id = ? AND date(created_at) >= ?;",
+                (child_id, start_day.isoformat()),
+            )
+            session_dates = {row["d"] for row in cursor.fetchall()}
+            cursor.execute(
+                "SELECT planned_date, status FROM learning_plan_events WHERE child_id = ? AND planned_date >= ?;",
+                (child_id, start_day.isoformat()),
+            )
+            event_rows = cursor.fetchall()
+
+        event_status: Dict[str, str] = {}
+        for row in event_rows:
+            event_status[row["planned_date"]] = row["status"]
+
+        planned = 0
+        done = 0
+        missed = 0
+        cursor_day = start_day
+        while cursor_day <= today:
+            key = self._WEEKDAY_KEYS[cursor_day.weekday()]
+            if key in plan_days:
+                planned += 1
+                iso = cursor_day.isoformat()
+                if event_status.get(iso) == "skipped":
+                    pass
+                elif iso in session_dates or event_status.get(iso) == "done":
+                    done += 1
+                elif cursor_day < today:
+                    missed += 1
+            cursor_day += timedelta(days=1)
+
+        rate = (done / planned) if planned else 0.0
+        return {
+            "has_plan": True,
+            "planned": planned,
+            "done": done,
+            "missed": missed,
+            "rate": round(rate, 2),
+        }
+
+    def build_learning_contract(self, child_id: str = "default_child") -> str:
+        """Dựng khối ngữ cảnh học tập để nhúng vào System Prompt.
+
+        Học là tính năng phụ, chỉ mở khi bé hoặc phụ huynh chủ động. Vì vậy khi
+        chưa có kế hoạch thì KHÔNG chèn gì cả — không khơi gợi, không nhắc lịch,
+        không biến cuộc trò chuyện thành lớp học.
+        """
+        plan = self.get_learning_plan(child_id)
+        if not plan or not plan.get("is_active"):
+            return ""
+
+        days = plan.get("days") or []
+        day_labels = ", ".join(
+            self._WEEKDAY_VN[self._WEEKDAY_KEYS.index(d)] for d in days if d in self._WEEKDAY_KEYS
+        ) or "chưa chọn ngày"
+        topics = ", ".join(plan.get("focus_topics") or []) or "tự do theo sở thích bé"
+        return (
+            "### 📅 Learning Plan (chỉ dùng khi bé hoặc phụ huynh mở lời trước):\n"
+            f"- Lịch hai bạn từng thống nhất: {day_labels}, lúc {plan.get('start_time', '19:00')}, "
+            f"mỗi buổi ~{plan.get('duration_minutes', 20)} phút.\n"
+            f"- Mục tiêu: {plan.get('weekly_goal') or 'khám phá vui vẻ'}.\n"
+            f"- Chủ đề bé từng chọn: {topics}.\n"
+            "- KHÔNG tự nhắc lịch, không hỏi \"hôm nay học gì\", không lồng bài tập hay mục tiêu "
+            "học vào câu chuyện thường ngày. Chỉ dùng thông tin này khi bé chủ động rủ học. "
+            "Khi bé học, giữ nhịp khám phá vui vẻ; hết thời lượng thì hỏi nhẹ bé muốn tiếp tục "
+            "trò chuyện hay nghỉ, không tự ngắt phiên."
+        )
+
+    # ==================== Device Registry & Ban Methods ====================
+
+    def register_device(
+        self,
+        device_fingerprint: str,
+        child_id: str,
+        device_model: str = "",
+        android_version: str = "",
+        app_version: str = "",
+        ip: str = ""
+    ) -> Dict[str, Any]:
+        """Đăng ký hoặc cập nhật thông tin thiết bị khi kết nối."""
+        if not device_fingerprint:
+            device_fingerprint = f"legacy_{child_id}"
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM device_registry WHERE device_fingerprint = ?;", (device_fingerprint,))
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute("""
+                    UPDATE device_registry
+                    SET child_id = ?,
+                        device_model = COALESCE(NULLIF(?, ''), device_model),
+                        android_version = COALESCE(NULLIF(?, ''), android_version),
+                        app_version = COALESCE(NULLIF(?, ''), app_version),
+                        last_ip = COALESCE(NULLIF(?, ''), last_ip),
+                        last_seen_at = ?
+                    WHERE device_fingerprint = ?;
+                """, (child_id, device_model, android_version, app_version, ip, now_iso, device_fingerprint))
+            else:
+                cursor.execute("""
+                    INSERT INTO device_registry (
+                        device_fingerprint, child_id, device_model, android_version, app_version,
+                        first_seen_at, last_seen_at, last_ip, is_blocked, block_reason, total_sessions, total_duration_sec
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, 0);
+                """, (device_fingerprint, child_id, device_model, android_version, app_version, now_iso, now_iso, ip))
+
+            conn.commit()
+            cursor.execute("SELECT * FROM device_registry WHERE device_fingerprint = ?;", (device_fingerprint,))
+            return dict(cursor.fetchone())
+
+    def is_device_blocked(
+        self,
+        device_fingerprint: Optional[str] = None,
+        child_id: Optional[str] = None,
+        ip: Optional[str] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """Kiểm tra xem thiết bị hoặc child_id có đang bị chặn không."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 1. Kiểm tra theo device_fingerprint
+            if device_fingerprint:
+                cursor.execute("SELECT is_blocked, block_reason FROM device_registry WHERE device_fingerprint = ?;", (device_fingerprint,))
+                row = cursor.fetchone()
+                if row and row["is_blocked"]:
+                    return True, row["block_reason"] or "Thiết bị này đã bị tạm ngưng kết nối bởi Quản trị viên."
+
+            # 2. Kiểm tra theo child_id
+            if child_id:
+                cursor.execute("SELECT is_blocked, block_reason FROM device_registry WHERE child_id = ? AND is_blocked = 1;", (child_id,))
+                row = cursor.fetchone()
+                if row:
+                    return True, row["block_reason"] or "Hồ sơ của bé đã bị tạm khóa bởi Quản trị viên."
+
+            return False, None
+
+    def set_device_block_status(
+        self,
+        device_fingerprint: str,
+        is_blocked: bool,
+        reason: Optional[str] = None
+    ) -> bool:
+        """Khóa hoặc mở khóa một thiết bị bất biến."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE device_registry
+                SET is_blocked = ?,
+                    block_reason = ?
+                WHERE device_fingerprint = ?;
+            """, (1 if is_blocked else 0, reason if is_blocked else None, device_fingerprint))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_device_session_stats(self, device_fingerprint: str, duration_sec: int):
+        """Cập nhật số phiên và tổng thời lượng đàm thoại cho thiết bị."""
+        if not device_fingerprint:
+            return
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE device_registry
+                SET total_sessions = total_sessions + 1,
+                    total_duration_sec = total_duration_sec + ?,
+                    last_seen_at = ?
+                WHERE device_fingerprint = ?;
+            """, (max(0, duration_sec), now_iso, device_fingerprint))
+            conn.commit()
+
+    def get_all_devices(self, search: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Lấy danh sách thiết bị cho Admin Dashboard."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            query = """
+                SELECT d.*, p.name as child_name, p.age as child_age, p.learning_level
+                FROM device_registry d
+                LEFT JOIN child_profile p ON d.child_id = p.child_id
+            """
+            params = []
+            if search and search.strip():
+                query += " WHERE d.device_fingerprint LIKE ? OR d.child_id LIKE ? OR d.device_model LIKE ? OR d.last_ip LIKE ? OR p.name LIKE ?"
+                s = f"%{search.strip()}%"
+                params.extend([s, s, s, s, s])
+
+            query += " ORDER BY d.last_seen_at DESC LIMIT ?;"
+            params.append(limit)
+
+            cursor.execute(query, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_device_metrics(self) -> Dict[str, Any]:
+        """Thống kê tổng quan thiết bị cho KPI Cards."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM device_registry;")
+            total_devices = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM device_registry WHERE is_blocked = 1;")
+            blocked_devices = cursor.fetchone()[0]
+
+            cursor.execute("SELECT SUM(total_duration_sec) FROM device_registry;")
+            total_duration_sec = cursor.fetchone()[0] or 0
+
+            return {
+                "total_devices": total_devices,
+                "blocked_devices": blocked_devices,
+                "active_devices": max(0, total_devices - blocked_devices),
+                "total_hours_spoken": round(total_duration_sec / 3600.0, 1)
+            }
+

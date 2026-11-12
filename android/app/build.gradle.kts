@@ -41,6 +41,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     // Compose BOM
     val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
     implementation(composeBom)
@@ -64,7 +65,7 @@ dependencies {
     // On-device Voice Activity Detection (Silero VAD)
     implementation("com.github.gkonovalov.android-vad:silero:2.0.10")
 
-    // CameraX (Mắt Thần Havs Robot)
+    // CameraX (Mắt Thần Doraemon)
     val cameraVersion = "1.3.4"
     implementation("androidx.camera:camera-core:$cameraVersion")
     implementation("androidx.camera:camera-camera2:$cameraVersion")

@@ -49,19 +49,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.draw.clip
+import com.example.digitalhuman.network.CompanionInfo
 
 /**
  * Màn hình cấu hình hồ sơ bé — chỉ hiện 1 lần khi bắt đầu sử dụng app
- * hoặc sau khi reset cấu hình. Dữ liệu này là nguồn cá nhân hóa cho Havs Robot.
+ * hoặc sau khi reset cấu hình. Dữ liệu này là nguồn cá nhân hóa cho nhân vật đồng hành.
  *
  * - Tên: textbox
  * - Tuổi & giới tính: dropdown
+ * - Nhân vật đồng hành: chọn từ bộ avatar dựng sẵn + đặt tên riêng
  * - Sở thích & tính cách: ô text (gõ + dấu phẩy để tạo thẻ) + thẻ gợi ý chọn nhiều
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SetupScreen(
-    onComplete: (String, Int, String, List<String>, String) -> Unit,
+    onComplete: (String, Int, String, List<String>, String, String, String, String, String) -> Unit,
     isSubmitting: Boolean,
     submitError: String?,
     serverUrl: String = "",
@@ -72,6 +74,14 @@ fun SetupScreen(
     var gender by remember { mutableStateOf("") }
     var hobbiesText by remember { mutableStateOf("") }
     var personalityText by remember { mutableStateOf("") }
+    var parentPin by remember { mutableStateOf("1234") }
+    var companionId by remember { mutableStateOf("boy_blue") }
+    var companionName by remember { mutableStateOf("") }
+    var companionNameCustomized by remember { mutableStateOf(false) }
+    var companionTouched by remember { mutableStateOf(false) }
+
+    val selectedCompanion = COMPANION_CHOICES.firstOrNull { it.id == companionId }
+        ?: COMPANION_CHOICES.first()
 
     val hostDisplay = remember(serverUrl) {
         serverUrl
@@ -134,7 +144,7 @@ fun SetupScreen(
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Havs Robot rất muốn làm bạn với bé. Bố mẹ hãy điền thông tin giúp bé nhé!",
+            text = "Nhân vật đồng hành rất muốn làm bạn với bé. Bố mẹ hãy điền thông tin giúp bé nhé!",
             color = Color.White.copy(alpha = 0.95f),
             fontSize = 13.sp,
             textAlign = TextAlign.Center
@@ -168,10 +178,45 @@ fun SetupScreen(
 
                 // 3. Giới tính (dropdown)
                 SectionLabel("3. Giới tính")
-                GenderDropdown(gender = gender, onGenderChange = { gender = it })
+                GenderDropdown(
+                    gender = gender,
+                    onGenderChange = { newGender ->
+                        gender = newGender
+                        // Tự gợi ý nhân vật theo giới tính nếu phụ huynh chưa tự chọn.
+                        if (!companionTouched) {
+                            companionId = if (newGender == "female") "girl_pink" else "boy_blue"
+                        }
+                    }
+                )
 
-                // 4. Sở thích: ô text + thẻ
-                SectionLabel("4. Sở thích của bé (gõ + dấu phẩy hoặc chọn thẻ)")
+                // 4. Nhân vật đồng hành (bộ avatar dựng sẵn + tên riêng)
+                SectionLabel("4. Chọn nhân vật đồng hành cho bé")
+                CompanionPicker(
+                    choices = COMPANION_CHOICES,
+                    selectedId = companionId,
+                    onSelect = { companion ->
+                        companionTouched = true
+                        companionId = companion.id
+                        companionName = nameAfterCompanionChoice(
+                            companionName, companionNameCustomized, companion.name,
+                        )
+                    }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = companionName,
+                    onValueChange = {
+                        companionName = it
+                        companionNameCustomized = it.isNotBlank()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Tên nhân vật (bé tự đặt, vd: ${selectedCompanion.name})", color = Color(0xFF64748B)) },
+                    singleLine = true,
+                    colors = textFieldColors()
+                )
+
+                // 5. Sở thích: ô text + thẻ
+                SectionLabel("5. Sở thích của bé (gõ + dấu phẩy hoặc chọn thẻ)")
                 TagInputField(
                     value = hobbiesText,
                     onValueChange = { hobbiesText = it },
@@ -179,13 +224,41 @@ fun SetupScreen(
                     presetOptions = HOBBY_OPTIONS
                 )
 
-                // 5. Tính cách: ô text + thẻ
-                SectionLabel("5. Tính cách của bé (gõ + dấu phẩy hoặc chọn thẻ)")
+                // 6. Tính cách: ô text + thẻ
+                SectionLabel("6. Tính cách của bé (gõ + dấu phẩy hoặc chọn thẻ)")
                 TagInputField(
                     value = personalityText,
                     onValueChange = { personalityText = it },
                     placeholder = "Ví dụ: hoạt bát, tò mò",
                     presetOptions = PERSONALITY_OPTIONS
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Card 4: Mã PIN phụ huynh để bảo vệ Góc Phụ Huynh
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                SectionLabel("🔐 MÃ PIN PHỤ HUYNH (ĐỂ TRUY CẬP BÁO CÁO & CÀI ĐẶT)")
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = parentPin,
+                    onValueChange = { if (it.length <= 6) parentPin = it },
+                    placeholder = { Text("4 số (mặc định: 1234)", color = Color.Gray) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = textFieldColors()
+                )
+                Text(
+                    text = "Dùng để mở Góc Phụ Huynh xem tiến độ học tập và chỉnh sửa hồ sơ sau này.",
+                    fontSize = 11.sp,
+                    color = Color(0xFF64748B),
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
         }
@@ -211,7 +284,7 @@ fun SetupScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        val canSubmit = name.isNotBlank() && age in 3..15 && gender.isNotBlank()
+        val canSubmit = name.isNotBlank() && age in 3..15 && gender.isNotBlank() && parentPin.length >= 4
 
         Button(
             onClick = {
@@ -220,7 +293,10 @@ fun SetupScreen(
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
                     .distinct()
-                onComplete(name.trim(), age, gender, hobbies, personalityText.trim())
+                onComplete(
+                    name.trim(), age, gender, hobbies, personalityText.trim(), parentPin.trim(),
+                    companionId, companionName.trim(), selectedCompanion.gender
+                )
             },
             enabled = canSubmit && !isSubmitting,
             modifier = Modifier
@@ -233,7 +309,7 @@ fun SetupScreen(
             )
         ) {
             Text(
-                text = if (isSubmitting) "Đang lưu..." else "Bắt đầu trò chuyện với Havs Robot",
+                text = if (isSubmitting) "Đang lưu..." else "Bắt đầu trò chuyện với ${companionName.ifBlank { selectedCompanion.name }}",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
@@ -243,6 +319,12 @@ fun SetupScreen(
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
+
+internal fun nameAfterCompanionChoice(
+    currentName: String,
+    isCustomized: Boolean,
+    presetName: String,
+): String = if (isCustomized) currentName else presetName
 
 /**
  * Dropdown tuổi 3-15. Dùng Box + DropdownMenu với nền tối và chữ sáng,
@@ -490,3 +572,68 @@ private val PERSONALITY_OPTIONS = listOf(
     "Thích được khen",
     "Bướng bỉnh",
 )
+
+/** Bộ nhân vật đồng hành dựng sẵn (đồng bộ với backend /api/companions). */
+private val COMPANION_CHOICES = listOf(
+    CompanionInfo("boy_blue", "Dora", "male", "Puck", listOf("#0288D1", "#4FC3F7", "#FFD54F"), "cap"),
+    CompanionInfo("boy_green", "Siro", "male", "Charon", listOf("#2E7D32", "#66BB6A", "#FFCA28"), "cap"),
+    CompanionInfo("girl_pink", "Miu", "female", "Aoede", listOf("#EC4899", "#F9A8D4", "#FDE68A"), "bow"),
+    CompanionInfo("girl_purple", "Luna", "female", "Kore", listOf("#8B5CF6", "#C4B5FD", "#FDE68A"), "bow"),
+)
+
+/**
+ * Bộ chọn nhân vật đồng hành: hiển thị các avatar dựng sẵn cho phụ huynh/bé chọn.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CompanionPicker(
+    choices: List<CompanionInfo>,
+    selectedId: String,
+    onSelect: (CompanionInfo) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        choices.forEach { companion ->
+            val selected = companion.id == selectedId
+            val accent = parseCompanionColor(companion.palette.firstOrNull()) ?: Color(0xFF0284C7)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (selected) accent.copy(alpha = 0.18f) else Color(0xFFF1F5F9))
+                    .clickable { onSelect(companion) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(if (companion.gender == "female") "🎀" else "🧢", fontSize = 22.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = companion.name,
+                    color = if (selected) accent else Color(0xFF334155),
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    fontSize = 13.sp
+                )
+                Text(
+                    text = if (companion.gender == "female") "Bé gái" else "Bé trai",
+                    color = Color(0xFF64748B),
+                    fontSize = 10.sp
+                )
+            }
+        }
+    }
+}
+
+private fun parseCompanionColor(hex: String?): Color? {
+    if (hex.isNullOrBlank()) return null
+    return try {
+        val clean = hex.trim().removePrefix("#")
+        when (clean.length) {
+            6 -> Color(0xFF000000L or clean.toLong(16))
+            8 -> Color(clean.toLong(16))
+            else -> null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}

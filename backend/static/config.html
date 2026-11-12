@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Havs Robot AI Tutor — Trung tâm Phụ huynh & Báo cáo</title>
+    <title>Doraemon AI Tutor — Trung tâm Phụ huynh & Báo cáo</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen p-4 md:p-6 font-sans">
     <div class="max-w-3xl mx-auto">
         <header class="text-center mb-6">
-            <h1 class="text-2xl md:text-3xl font-black tracking-wide text-cyan-400">🤖 Trung Tâm Phụ Huynh Havs Robot</h1>
+            <h1 class="text-2xl md:text-3xl font-black tracking-wide text-cyan-400">🤖 Trung Tâm Phụ Huynh Doraemon</h1>
             <p class="text-slate-400 text-sm mt-2">
                 Quản lý hồ sơ cá nhân hóa và theo dõi tiến trình học tập, phản xạ tiếng Anh của bé.
             </p>
@@ -83,7 +83,7 @@
                 </div>
             </div>
 
-            <!-- Huy hiệu Bảo bối Havs Robot đã mở khóa -->
+            <!-- Huy hiệu Bảo bối Doraemon đã mở khóa -->
             <div class="bg-slate-800/70 border border-slate-700 rounded-2xl p-5">
                 <h2 class="text-base font-bold text-cyan-300 mb-3 flex items-center gap-2">
                     <span>🏅</span> Bộ Sưu Tập Huy Hiệu Bảo Bối
@@ -106,7 +106,7 @@
                         </div>
                     </div>
                     <div class="pt-2 border-t border-slate-700/60">
-                        <div class="text-xs font-semibold text-amber-400 uppercase mb-1.5">🎯 Từ vựng Havs Robot đang đồng hành ôn luyện:</div>
+                        <div class="text-xs font-semibold text-amber-400 uppercase mb-1.5">🎯 Từ vựng Doraemon đang đồng hành ôn luyện:</div>
                         <div id="needsPracticeList" class="flex flex-wrap gap-2">
                             <span class="text-xs text-slate-500 italic">Chưa có từ vựng cần ôn tập.</span>
                         </div>
@@ -214,7 +214,7 @@
             <div>
                 <h2 class="text-lg font-bold text-cyan-300 mb-3">Tính cách & phong cách giao tiếp</h2>
                 <textarea id="personality" rows="4" placeholder="vd: Bé hơi nhút nhát, cần động viên nhiều, thích được khen cụ thể. Hay tò mò về động vật." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm"></textarea>
-                <p class="text-xs text-slate-500 mt-1">Mô tả để Havs Robot điều chỉnh giọng điệu và cách động viên cho phù hợp với bé.</p>
+                <p class="text-xs text-slate-500 mt-1">Mô tả để Doraemon điều chỉnh giọng điệu và cách động viên cho phù hợp với bé.</p>
             </div>
 
             <!-- Nút & trạng thái -->
@@ -323,7 +323,7 @@
                     masteredBox.appendChild(chip);
                 });
             } else {
-                masteredBox.innerHTML = '<span class="text-xs text-slate-500 italic">Chưa có từ vựng nào. Hãy cùng bé trò chuyện tiếng Anh với Havs Robot nhé!</span>';
+                masteredBox.innerHTML = '<span class="text-xs text-slate-500 italic">Chưa có từ vựng nào. Hãy cùng bé trò chuyện tiếng Anh với Doraemon nhé!</span>';
             }
 
             // Render Needs Practice Words
@@ -353,7 +353,7 @@
                             <span class="font-medium text-cyan-400">${s.created_at || 'Gần đây'}</span>
                             <span>⏱️ ${durationMin > 0 ? durationMin + ' phút' : s.duration_seconds + ' giây'}</span>
                         </div>
-                        <div class="text-slate-200">${s.summary || 'Buổi trò chuyện vui vẻ cùng Havs Robot.'}</div>
+                        <div class="text-slate-200">${s.summary || 'Buổi trò chuyện vui vẻ cùng Doraemon.'}</div>
                     `;
                     sessionsBox.appendChild(row);
                 });
@@ -448,7 +448,7 @@
                 });
                 const data = await resp.json();
                 if (resp.ok) {
-                    showResult(true, `Đã lưu hồ sơ cho "${childId}". Havs Robot giờ sẽ hiểu tên, tuổi, sở thích và tính cách của bé.`);
+                    showResult(true, `Đã lưu hồ sơ cho "${childId}". Doraemon giờ sẽ hiểu tên, tuổi, sở thích và tính cách của bé.`);
                     loadData();
                 } else {
                     showResult(false, 'Lỗi: ' + (data.detail || 'Không thể lưu hồ sơ.'));

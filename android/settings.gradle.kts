@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "HavsRobot"
+rootProject.name = "DigitalHuman"
 include(":app")

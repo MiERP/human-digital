@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Havs Robot
+name: CI/CD Pipeline - Doraemon Digital Human
 
 on:
   push:
