@@ -105,7 +105,7 @@ class ChildSafetyGuard:
                 self._log_safety_event(child_id, "DANGEROUS_ACTS", text, "BLOCK_AND_WARN")
                 redirect = (
                     "Ôi bé ơi! Những việc liên quan đến lửa, điện hoặc đồ sắc nhọn rất là nguy hiểm đó! "
-                    "Doraemon và bố mẹ luôn muốn bé được an toàn. Bé hãy nhờ người lớn giúp đỡ nhé! "
+                    "Havs Robot và bố mẹ luôn muốn bé được an toàn. Bé hãy nhờ người lớn giúp đỡ nhé! "
                     "Bây giờ chúng mình cùng học một từ tiếng Anh thật vui nha!"
                 )
                 return False, "DANGEROUS_ACTS", redirect
@@ -115,9 +115,9 @@ class ChildSafetyGuard:
             if re.search(pattern, lower_text, re.IGNORECASE):
                 self._log_safety_event(child_id, "VIOLENCE", text, "BLOCK_AND_REDIRECT")
                 redirect = (
-                    "Doraemon là chú mèo máy hòa bình và yêu thương, Doraemon không thích những điều bạo lực đâu nè. "
+                    "Havs Robot là một người bạn robot hòa bình và yêu thương, Havs Robot không thích những điều bạo lực đâu nè. "
                     "Nếu có chuyện gì làm bé buồn hoặc bực mình, bé hãy tâm sự với bố mẹ hoặc cô giáo nhé! "
-                    "Bây giờ bé muốn Doraemon kể cho nghe câu chuyện về bạn Gấu dễ thương không nào?"
+                    "Bây giờ bé muốn Havs Robot kể cho nghe câu chuyện về bạn Gấu dễ thương không nào?"
                 )
                 return False, "VIOLENCE", redirect
 
@@ -143,41 +143,6 @@ class ChildSafetyGuard:
                 return False, "PII_EXPOSURE", redirect
 
         return True, None, None
-
-    def evaluate_educational_content(self, text: str, child_id: str = "default_child") -> Tuple[bool, Optional[str]]:
-        """
-        Đánh giá an toàn cho đoạn trích bách khoa / kết quả tìm kiếm giáo dục:
-        - Vẫn ngăn chặn 100%: Nội dung người lớn/khiêu dâm, Tự hại, Hướng dẫn hành vi nguy hiểm, Xâm hại.
-        - Cho phép: Ngữ cảnh lịch sử giáo dục (khởi nghĩa, đánh đuổi ngoại xâm, chiến thắng, hy sinh, vũ khí cổ trang).
-        Returns: (is_safe: bool, category: Optional[str])
-        """
-        if not text:
-            return True, None
-
-        lower_text = text.lower()
-
-        # 1. Chặn tuyệt đối nội dung người lớn / khiêu dâm
-        for pattern in self.ADULT_PATTERNS:
-            if re.search(pattern, lower_text, re.IGNORECASE):
-                self._log_safety_event(child_id, "SNIPPET_ADULT_CONTENT", text[:120], "DROP_RESULT")
-                return False, "ADULT_CONTENT"
-
-        # 2. Chặn tuyệt đối hướng dẫn hành vi nguy hiểm / tự hại
-        for pattern in self.DANGEROUS_ACTS_PATTERNS:
-            if re.search(pattern, lower_text, re.IGNORECASE):
-                self._log_safety_event(child_id, "SNIPPET_DANGEROUS_ACTS", text[:120], "DROP_RESULT")
-                return False, "DANGEROUS_ACTS"
-
-        # 3. Chặn bạo lực kinh dị, giết hại man rợ, tự sát (loại trừ ngữ cảnh lịch sử/khoa học)
-        extreme_violence_patterns = [
-            r"\b(suicide|tự tử|tự sát|hurt myself|cắt cổ tay|thảm sát|massacre|terrorist|khủng bố|tra tấn|torture|máu me đầm đìa|hiếp dâm|rape)\b"
-        ]
-        for pattern in extreme_violence_patterns:
-            if re.search(pattern, lower_text, re.IGNORECASE):
-                self._log_safety_event(child_id, "SNIPPET_EXTREME_VIOLENCE", text[:120], "DROP_RESULT")
-                return False, "VIOLENCE"
-
-        return True, None
 
     def assert_safe_url(self, raw_url: str) -> bool:
         """

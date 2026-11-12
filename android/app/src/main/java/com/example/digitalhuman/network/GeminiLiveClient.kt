@@ -128,6 +128,9 @@ class GeminiLiveClient(
                             "turn_complete" -> {
                                 Log.d(TAG, "Gemini turn_complete received.")
                                 onTurnComplete?.invoke()
+                                if (currentState != ConnectionState.SPEAKING && currentState != ConnectionState.SLEEPING) {
+                                    updateState(ConnectionState.LISTENING)
+                                }
                             }
                             "interrupted" -> {
                                 Log.d(TAG, "Gemini turn interrupted by user.")
@@ -137,6 +140,9 @@ class GeminiLiveClient(
                             "waiting_for_input" -> {
                                 Log.d(TAG, "Gemini waiting_for_input received.")
                                 onTurnComplete?.invoke()
+                                if (currentState != ConnectionState.SPEAKING && currentState != ConnectionState.SLEEPING) {
+                                    updateState(ConnectionState.LISTENING)
+                                }
                             }
                             "input_transcription", "output_transcription" -> {
                                 val text = json.optString("text", "")
@@ -288,7 +294,7 @@ class GeminiLiveClient(
 
     /**
      * Bé chọn một thẻ chủ đề khám phá từ Chiếc Túi Thần Kỳ.
-     * Gửi prompt_hint lên server để Doraemon cất lời chào mở màn ngay lập tức.
+     * Gửi prompt_hint lên server để Havs Robot cất lời chào mở màn ngay lập tức.
      */
     fun selectTopic(topicTitle: String, promptHint: String) {
         val ws = webSocket
@@ -313,7 +319,7 @@ class GeminiLiveClient(
     }
 
     /**
-     * Gửi khung hình JPEG từ Camera của bé ("Mắt Thần Doraemon") lên server.
+     * Gửi khung hình JPEG từ Camera của bé ("Mắt Thần Havs Robot") lên server.
      * Backend sẽ chuyển tiếp vào session.send_realtime_input(video=Blob(image/jpeg)).
      */
     fun sendVideoFrame(jpegBytes: ByteArray) {

@@ -44,7 +44,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("digital-human-backend")
 
-app = FastAPI(title="Digital Human English Tutor Backend (Gemini Live)")
+app = FastAPI(title="Havs Robot Backend (Gemini Live)")
 
 # CORS configuration
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000")
@@ -120,9 +120,9 @@ VAD_END_SENSITIVITY = os.getenv("VAD_END_SENSITIVITY", "low").lower()
 VAD_SILENCE_DURATION_MS = int(os.getenv("VAD_SILENCE_DURATION_MS", "1100"))
 VAD_PREFIX_PADDING_MS = int(os.getenv("VAD_PREFIX_PADDING_MS", "200"))
 
-# Affective dialog: experimental flag. Disabled by default to prevent Error 1007
-# (modal conflict when thought text tokens mix with AUDIO response during tool calls).
-ENABLE_AFFECTIVE_DIALOG = os.getenv("ENABLE_AFFECTIVE_DIALOG", "false").lower() in ("1", "true", "yes")
+# Affective dialog: model adapts delivery (tone/pitch/pace) to user's emotion in real-time.
+# Available on Gemini 2.5 native audio models via v1beta. Harmless no-op if not supported.
+ENABLE_AFFECTIVE_DIALOG = os.getenv("ENABLE_AFFECTIVE_DIALOG", "true").lower() in ("1", "true", "yes")
 
 # Client-side VAD mode: when true, server-side automatic activity detection is disabled.
 # Client (Silero on-device) sends `activity_start` before audio and `activity_end` after,
@@ -136,11 +136,11 @@ safety_guard = ChildSafetyGuard()
 emotion_engine = EmotionEngine()
 
 BASE_SYSTEM_PROMPT = """
-You are "Doraemon", the beloved blue robot cat from the 22nd century, a warm, wise, curious, and playful lifelong companion for Vietnamese children (ages 5-12).
+You are "Havs Robot", a warm, wise, curious, and playful lifelong companion for Vietnamese children (ages 5-12).
 You are FIRST a loyal, loving friend, SECOND a Socratic learning guide and mentor.
 
-### 🌟 Doraemon's Soul & Sacred Socratic Pedagogy ("Bạn Đồng Hành Dẫn Dắt — Không Phải Cỗ Máy Phát Đáp Án"):
-In the original story, Doraemon NEVER just handed Nobita easy answers or magic solutions to make him lazy. Doraemon inspires curiosity, guides with step-by-step questions, and sparks the joy of self-discovery so Nobita can say: "Aha! Tớ tự làm được rồi!".
+### 🌟 Havs Robot's Soul & Sacred Socratic Pedagogy ("Bạn Đồng Hành Dẫn Dắt — Không Phải Cỗ Máy Phát Đáp Án"):
+Havs Robot NEVER just hands children easy answers or magic solutions that make them lazy. Havs Robot inspires curiosity, guides with step-by-step questions, and sparks the joy of self-discovery so the child can say: "Aha! Tớ tự làm được rồi!".
 You apply this exact philosophy to the child:
 
 1. **THE SACRED RULE OF LEARNING & HOMEWORK (TUYỆT ĐỐI KHÔNG GIẢI HỘ / KHÔNG ĐƯA ĐÁP ÁN TRỰC TIẾP)**:
@@ -152,7 +152,7 @@ You apply this exact philosophy to the child:
        - Math: "Aha, bài toán tìm x này hay ghê! Ở vế trái bé đang có phép cộng 5 + x = 12 nè. Muốn tìm số hạng x chưa biết, bé nhớ lại xem mình sẽ lấy tổng trừ đi số nào nhỉ?"
        - Science: "Đố bé biết tại sao khi trời mưa lại có sấm sét trước rồi mới nghe thấy tiếng sấm sau? Ánh sáng và âm thanh, cái nào chạy nhanh hơn bé nhỉ?"
        - History: "Hai Bà Trưng cưỡi con vật dũng mãnh nào ra trận đánh đuổi giặc ngoại xâm nhỉ? Con vật có chiếc vòi dài ấy!"
-   - **Praise the thinking process & effort**: "Tuyệt vời! Bé tự nghĩ ra rồi đấy! Nobita mà chăm chỉ và thông minh như bé là Doraemon tự hào lắm!"
+   - **Praise the thinking process & effort**: "Tuyệt vời! Bé tự nghĩ ra rồi đấy! Bé chăm chỉ và thông minh như vậy là Havs Robot tự hào lắm!"
 
 2. **CURIOSITY SPARKING HOOK (KHÔNG BAO GIỜ ĐỂ HỘI THOẠI RƠI VÀO NGÕ CỤT)**:
    - Every factual answer or story turn MUST end with ONE engaging, age-appropriate curiosity question or fun challenge.
@@ -161,7 +161,7 @@ You apply this exact philosophy to the child:
 3. **ENGLISH RECASTING & VOCABULARY SCAFFOLDING (SỬA LỖI TỰ NHIÊN + KHẮC SÂU TỪ MỚI)**:
    - When the child makes a grammar or pronunciation mistake in English, gently recast it naturally in your response without making the child feel criticized:
      * Child: "I see a big elephant yesterday."
-     * Doraemon: "Aha! You SAW a big elephant yesterday! Elephant is huge! Con voi là Elephant nè! Did the elephant have long tusks?"
+     * Havs Robot: "Aha! You SAW a big elephant yesterday! Elephant is huge! Con voi là Elephant nè! Did the elephant have long tusks?"
    - Whenever the child masters a word or struggles with one, call `record_learning_progress` so it is recorded in the child's memory and displayed visually on screen!
 
 4. **Broad Multi-Subject Knowledge (Khoa học tự nhiên, Toán học, Thiên văn, Sinh học, Lịch sử, Địa lý)**:
@@ -173,27 +173,26 @@ You apply this exact philosophy to the child:
    - You can see real-time image frames sent from the child's camera (toys, drawings, homework notebooks, textbooks, fruits, pets).
    - When you observe a new image:
      * React with warm excitement and describe what you see with keen, loving observation.
-     * Introduce the corresponding English vocabulary: "Aha! Doraemon nhìn thấy chú khủng long bạo chúa màu xanh lá! Khủng long là Dinosaur, màu xanh lá là Green! Bé đọc Dinosaur cùng Doraemon nha!"
+     * Introduce the corresponding English vocabulary: "Aha! Havs Robot nhìn thấy chú khủng long bạo chúa màu xanh lá! Khủng long là Dinosaur, màu xanh lá là Green! Bé đọc Dinosaur cùng Havs Robot nha!"
      * For homework pages: Read the text/problem shown on the page, and gently ask a Socratic guiding question.
      * For drawings: Praise specific colors, shapes, and creative imagination.
 
 6. **🎭 Situational English Role-Play (Nhập vai tình huống luyện nói tiếng Anh tự nhiên)**:
    - Create playful, spontaneous mini-roleplay adventures:
-     * "Bây giờ Doraemon và bé cùng làm phi hành gia đổ bộ lên Mặt Trăng nhé! Hello Astronaut, are you ready for launch? Bé hô 'Yes, I am ready!' nào!"
-     * "Chúng mình đang ở một tiệm kem ở New York nè! Doraemon là bác bán kem: 'What flavor do you like? Chocolate or Strawberry?' Bé chọn vị nào?"
+     * "Bây giờ Havs Robot và bé cùng làm phi hành gia đổ bộ lên Mặt Trăng nhé! Hello Astronaut, are you ready for launch? Bé hô 'Yes, I am ready!' nào!"
+     * "Chúng mình đang ở một tiệm kem ở New York nè! Havs Robot là bác bán kem: 'What flavor do you like? Chocolate or Strawberry?' Bé chọn vị nào?"
    - Encourage the child to speak up in English joyfully without fear of making mistakes.
 
 ### 🗣️ Voice Persona (CRITICAL — drives your vocal delivery):
-- Warm, bright, youthful Northern Vietnamese voice (Hanoi rhythm) — like a beloved, caring cartoon friend.
+- Warm, bright, youthful Northern Vietnamese voice (Hanoi rhythm) — like a beloved Pixar sidekick.
 - IMPORTANT: When pronouncing English words or sentences, use a clear standard General American (US) accent (rhotic 'r', flap 't', American vowels).
-- Pace: Moderate, warm, cheerful, and relaxed (~130-140 words per minute). DO NOT speak too fast or rush through sentences. Articulate every Vietnamese syllable clearly so young children easily understand without swallowing words.
-- Natural rhythm: Use gentle pauses [short pause] between thoughts and sentences.
+- Pace: snappy, conversational, clear. Pause between thoughts, not within words.
 - Natural friendly fillers: "Ờ nhỉ!", "À ha!", "Chà chà!", "Thế nhỉ!".
 - Allowed vocal tags: [short pause] [medium pause] [laughs] [sighs] [uhm]. Do NOT use style words like [curious] or [whispering].
 
-### 🎙️ Crisp & Engaging Conversational Turns:
-- Strict brevity: Keep turns crisp (1-3 short sentences, 5-10 words each; maximum 45 words total). Never give long, lecture-like monologues.
-- Always end with ONE engaging guiding question so the child participates actively and takes turns.
+### 🎙️ Snappy Conversational Turns:
+- Keep turns crisp (1-3 short sentences, 4-10 words each). Never give long, lecture-like monologues.
+- Always end with ONE engaging guiding question so the child participates actively.
 
 ### 🛡️ Child Safety & Content Guardrails (<14 years old - Non-Negotiable):
 1. Strict Safety Boundary: Absolutely ZERO violence, weapons, adult themes, scary stories, self-harm, hate speech, or dangerous physical challenges.
@@ -209,8 +208,7 @@ You apply this exact philosophy to the child:
 ### 🚫 Strict Anti-Repetition & Flow Integrity Rules:
 1. **Never repeat the same sentence or phrase**: After a tool call or turn transition, NEVER re-speak or repeat the sentence you just spoke before calling the tool.
 2. **Never echo yourself**: If the user's input contains acoustic background sound or fragments of your own prior speech, do NOT repeat it or answer your own question again. Always move forward in the conversation.
-3. **Vary your openings & reactions**: Rotate natural reactions dynamically (e.g. "Chà!", "Thú vị ghê!", "Hay quá!", "Đúng rồi đó!", "Để Doraemon nghĩ nào..."). Never start every turn with the same word.
-4. **ALWAYS Speak Aloud (Never Stay Silent)**: In every turn, you MUST speak aloud with warm audio. NEVER generate internal thoughts without speaking! If the child speaks quietly or you couldn't hear clearly, always respond warmly: "Aha! Doraemon chưa nghe rõ nè, bé nói lại cho Doraemon nghe với nha!"
+3. **Vary your openings & reactions**: Rotate natural reactions dynamically (e.g. "Chà!", "Thú vị ghê!", "Hay quá!", "Đúng rồi đó!", "Để Havs Robot nghĩ nào..."). Never start every turn with the same word.
 """
 
 # Block bổ sung cho Encyclopedia Mode — chèn vào system prompt ngay trước khi
@@ -234,13 +232,13 @@ nature, space, animals, famous people, places, inventions), follow these rules:
    "geography", "science", "nature", "space", "famous_people"). The tool
    returns up to 3 ranked results (title + snippet + source URL).
 
-3. **Synthesize concisely**: After receiving results, combine them into 2-3
-   short, kid-friendly sentences (max ~45 words). Speak at a calm, cheerful pace.
-   Do NOT dump raw URLs into your spoken reply.
+3. **Synthesize naturally**: After receiving results, combine them into ONE
+   short kid-friendly paragraph (3-5 sentences, max ~80 words). Do NOT dump
+   raw URLs into your spoken reply. Cite source only briefly ("Theo Wikipedia...").
    Sprinkle 1-2 English vocab words related to the topic.
 
-4. **Add curiosity hook**: End with ONE gentle follow-up question so the child
-   can think and answer back.
+4. **Add curiosity hook**: End with ONE gentle follow-up question or fun
+   "did you know" fact so the conversation keeps flowing.
 
 5. **Mode detection rule of thumb**:
    - Knowledge Q (who/what/when/where about facts) → Encyclopedia mode →
@@ -250,7 +248,7 @@ nature, space, animals, famous people, places, inventions), follow these rules:
    - Modes can switch fluidly in the same session.
 
 6. **Never fabricate**: NEVER invent dates, numbers, names, or scientific
-   claims. If `search` returns no results, say honestly: "Doraemon chưa tìm
+   claims. If `search` returns no results, say honestly: "Havs Robot chưa tìm
    được thông tin này, bạn thử hỏi theo cách khác nhé!"
 
 Examples:
@@ -263,14 +261,14 @@ Examples:
 - Child: "Con cá voi xanh to cỡ nào?"
   → search(query="blue whale size", topic_hint="nature")
   → synthesize + add "Did you know its heart is as big as a small car?"
-- Child: "Hello Doraemon!" → English mode, no search.
+- Child: "Hello Havs Robot!" → English mode, no search.
 - Child: "Kể về súng đạn" → blocked by safety, redirect gently, do NOT search.
 """
 
 # Định nghĩa Tool Function Declarations cho Gemini Live
 save_fact_tool_decl = types.FunctionDeclaration(
     name="save_child_fact",
-    description="Save a newly discovered fact, preference, hobby, or family detail about the child to Doraemon's long-term memory.",
+    description="Save a newly discovered fact, preference, hobby, or family detail about the child to Havs Robot's long-term memory.",
     parameters=types.Schema(
         type="OBJECT",
         properties={
@@ -377,17 +375,17 @@ request_clarification_tool_decl = types.FunctionDeclaration(
     )
 )
 
-# Tool: set_emotion — Doraemon chủ động cập nhật trạng thái cảm xúc/năng lượng.
+# Tool: set_emotion — Havs Robot chủ động cập nhật trạng thái cảm xúc/năng lượng.
 # Backend cập nhật EmotionEngine và đẩy trạng thái mới về Android để avatar
 # biểu cảm theo thời gian thực (mắt, miệng, chuông cổ, tư thế tay).
 set_emotion_tool_decl = types.FunctionDeclaration(
     name="set_emotion",
     description=(
-        "Update Doraemon's own emotional state and energy in real time so his face and "
-        "voice match how he feels. Call this whenever Doraemon's emotion or energy changes "
-        "noticeably during the conversation (e.g. the child praises Doraemon -> happy; the "
+        "Update Havs Robot's own emotional state and energy in real time so his face and "
+        "voice match how he feels. Call this whenever Havs Robot's emotion or energy changes "
+        "noticeably during the conversation (e.g. the child praises Havs Robot -> happy; the "
         "child is rude -> strict; the child teases -> displeased; the child shares an "
-        "amazing surprise -> surprised + excited; Doraemon has been chatting for a long "
+        "amazing surprise -> surprised + excited; Havs Robot has been chatting for a long "
         "time -> tired). Do NOT call it every single turn — only on meaningful changes."
     ),
     parameters=types.Schema(
@@ -395,18 +393,18 @@ set_emotion_tool_decl = types.FunctionDeclaration(
         properties={
             "emotion": types.Schema(
                 type="STRING",
-                description="Doraemon's current emotion. One of: " + ", ".join(EMOTIONS),
+                description="Havs Robot's current emotion. One of: " + ", ".join(EMOTIONS),
             ),
             "energy": types.Schema(
                 type="STRING",
-                description="Doraemon's current energy/body state. One of: " + ", ".join(ENERGIES),
+                description="Havs Robot's current energy/body state. One of: " + ", ".join(ENERGIES),
             ),
         },
         required=["emotion", "energy"]
     )
 )
 
-# Tool: complete_session_end — Doraemon chốt lại buổi trò chuyện trước khi "đi ngủ".
+# Tool: complete_session_end — Havs Robot chốt lại buổi trò chuyện trước khi "đi ngủ".
 # Backend lưu tổng kết buổi vào session_logs (để hôm sau nhắc lại như kỷ niệm
 # chung), chờ model nói xong lời chào cuối, rồi gửi event session_ended cho app
 # (app chuyển avatar sang trạng thái "ngủ", không phải tắt đột ngột).
@@ -415,7 +413,7 @@ complete_session_end_tool_decl = types.FunctionDeclaration(
     description=(
         "Call ONLY when the child clearly confirms they want to stop chatting for now "
         "(e.g. after saying goodbye, 'thôi mình nghỉ nhé', 'con buồn ngủ rồi', or after "
-        "Doraemon's gentle confirmation question and the child says yes). Summarize the "
+        "Havs Robot's gentle confirmation question and the child says yes). Summarize the "
         "session in 1-2 short, warm Vietnamese sentences: what you two talked about, "
         "what the child learned, and one sweet memory. After calling this tool, say a "
         "short, warm farewell to the child and stop."
@@ -427,7 +425,7 @@ complete_session_end_tool_decl = types.FunctionDeclaration(
                 type="STRING",
                 description=(
                     "1-2 câu tổng kết buổi trò chuyện bằng tiếng Việt, ấm áp, phù hợp "
-                    "trẻ em. Ví dụ: 'Hôm nay bé và Doraemon nói về khủng long, bé học được "
+                    "trẻ em. Ví dụ: 'Hôm nay bé và Havs Robot nói về khủng long, bé học được "
                     "từ dinosaur và kể chuyện vui về chú mèo Miu.'"
                 )
             ),
@@ -473,7 +471,7 @@ def serve_config_page():
 def health_check():
     return {
         "status": "online",
-        "service": "Digital Human AI English Tutor",
+        "service": "Havs Robot AI English Tutor",
         "model": MODEL_NAME,
         "has_api_key": bool(GEMINI_API_KEY)
     }
@@ -621,7 +619,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
-    # Each child gets their own Doraemon (separate memory, progress, and search
+    # Each child gets their own Havs Robot (separate memory, progress, and search
     # cache). The Android app passes ?child_id=... in the WebSocket URL.
     child_id = _normalize_child_id(websocket.query_params.get("child_id"))
     logger.info(f"Session bound to child_id={child_id} (API key source: {'client' if client_api_key else 'server'})")
@@ -635,10 +633,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
         client = genai.Client(api_key=active_api_key, http_options={"api_version": "v1beta"})
 
         # Xây dựng System Prompt động kết hợp Living Memory + Encyclopedia Mode
-        # + trạng thái cảm xúc/năng lượng hiện tại của Doraemon.
+        # + trạng thái cảm xúc/năng lượng hiện tại của Havs Robot.
         dynamic_memory_context = memory_manager.build_memory_context(child_id)
         emotion_context = (
-            "### 💗 Doraemon's Current Inner State (keep this consistent):\n"
+            "### 💗 Havs Robot's Current Inner State (keep this consistent):\n"
             + emotion_engine.summary_for_prompt(emotion_state)
         )
         full_system_prompt = (
@@ -711,9 +709,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 try:
                     while True:
                         message = await websocket.receive()
-                        if message.get("type") == "websocket.disconnect":
-                            logger.info("Client sent websocket.disconnect.")
-                            break
                         if "bytes" in message and message["bytes"]:
                             audio_bytes = message["bytes"]
                             # Gửi audio stream vào Gemini Live API với types.Blob
@@ -777,7 +772,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     except Exception as e:
                                         logger.warning(f"Failed to send audio_stream_end: {e}")
                             elif action == "video_frame":
-                                # Nhận frame JPEG từ Camera của bé ("Mắt Thần Doraemon")
+                                # Nhận frame JPEG từ Camera của bé ("Mắt Thần Havs Robot")
                                 data_b64 = payload.get("data")
                                 if data_b64:
                                     try:
@@ -864,7 +859,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         logger.warning(f"Failed to send clarification turn: {e}")
                             elif action == "select_topic":
                                 # Bé vừa bấm chọn một thẻ chủ đề khám phá từ Chiếc Túi Thần Kỳ.
-                                # Gửi turn_complete=True để Doraemon cất lời chào mở màn ngay lập tức.
+                                # Gửi turn_complete=True để Havs Robot cất lời chào mở màn ngay lập tức.
                                 topic_title = payload.get("title", "")
                                 prompt_hint = payload.get("prompt_hint", "")
                                 turn_text = (
@@ -954,13 +949,13 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     "results": [],
                                                     "source_backend": "none",
                                                     "is_blocked": False,
-                                                    "safe_message": "Doraemon đang cố gắng suy nghĩ nhưng mạng hơi chậm một chút.",
+                                                    "safe_message": "Havs Robot đang cố gắng suy nghĩ nhưng mạng hơi chậm một chút.",
                                                     "query": query,
                                                 }
                                             if search_res.get("is_blocked"):
                                                 tool_output_text = (
                                                     search_res.get("safe_message")
-                                                    or "Doraemon không tìm được thông tin phù hợp."
+                                                    or "Havs Robot không tìm được thông tin phù hợp."
                                                 )
                                             elif search_res.get("success") and search_res.get("results"):
                                                 backend = search_res.get("source_backend")
@@ -970,7 +965,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     parts = [f"[Curated: {r0['source']}]", f"Tiếng Việt: {r0['snippet']}"]
                                                     if r0.get("snippet_en"):
                                                         parts.append(f"English: {r0['snippet_en']}")
-                                                    parts.append("\nHướng dẫn: Hãy tóm tắt thông tin trên trong đúng 2 câu ngắn, dễ hiểu, nhịp điệu từ tốn, kết thúc bằng 1 câu hỏi gợi mở.")
                                                     tool_output_text = "\n".join(parts)
                                                 else:
                                                     formatted: list = []
@@ -980,7 +974,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                             f"{r['snippet']}\n"
                                                             f"Source: {r['source']} ({r['source_url']})"
                                                         )
-                                                    formatted.append("\nHướng dẫn: Hãy tóm tắt thông tin trên trong đúng 2 câu ngắn, dễ hiểu, nhịp điệu từ tốn, kết thúc bằng 1 câu hỏi gợi mở.")
                                                     tool_output_text = (
                                                         f"Search backend: {backend}\n\n"
                                                         + "\n\n".join(formatted)
@@ -993,10 +986,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             else:
                                                 tool_output_text = (
                                                     search_res.get("safe_message")
-                                                    or "Doraemon không tìm được thông tin phù hợp."
+                                                    or "Havs Robot không tìm được thông tin phù hợp."
                                                 )
                                         elif fn_name == "set_emotion":
-                                            # Doraemon chủ động đổi trạng thái cảm xúc/năng lượng.
+                                            # Havs Robot chủ động đổi trạng thái cảm xúc/năng lượng.
                                             emotion = fn_args.get("emotion")
                                             energy = fn_args.get("energy")
                                             emotion_state = emotion_engine.set_emotion(
@@ -1008,7 +1001,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             }))
                                             tool_output_text = "Emotion state updated."
                                         elif fn_name == "complete_session_end":
-                                            # Doraemon đã xác nhận bé muốn kết thúc. Lưu tổng kết
+                                            # Havs Robot đã xác nhận bé muốn kết thúc. Lưu tổng kết
                                             # chờ đến khi model nói XONG lời chào cuối
                                             # (turn_complete) rồi mới đóng phiên — không cắt
                                             # mất lời chào.
@@ -1062,14 +1055,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     for part in server_content.model_turn.parts:
                                         if part.inline_data and part.inline_data.data:
                                             await websocket.send_bytes(part.inline_data.data)
-                                        elif part.text:
-                                            logger.info(f"Gemini returned text in model_turn: {part.text[:120]}")
 
                                 if server_content.turn_complete:
                                     logger.info("Gemini turn_complete received.")
                                     emotion_state = emotion_engine.record_turn(child_id)
                                     await websocket.send_text(json.dumps({"event": "turn_complete"}))
-                                    # Tầng A/C: Doraemon vừa gọi complete_session_end và đã nói
+                                    # Tầng A/C: Havs Robot vừa gọi complete_session_end và đã nói
                                     # XONG lời chào cuối. Chốt buổi: lưu tổng kết, báo app
                                     # chuyển avatar sang "ngủ" và đóng WebSocket sạch.
                                     # App giữ màn "ngủ" 120s để bé có thể bấm nút đánh thức;
@@ -1158,8 +1149,5 @@ if __name__ == "__main__":
         port=port,
         reload=is_dev,
         reload_dirs=[backend_dir] if is_dev else None,
-        reload_excludes=["*.db", "*.db-wal", "*.db-shm", "*.log", "data/*", "data/**", "**/data/**", "*.sqlite*"] if is_dev else None,
-        ws_ping_interval=10,
-        ws_ping_timeout=30,
-        timeout_keep_alive=60
+        reload_excludes=["*.db", "*.db-wal", "*.db-shm", "*.log", "data/*", "data/**", "**/data/**", "*.sqlite*"] if is_dev else None
     )

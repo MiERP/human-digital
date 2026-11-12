@@ -1,15 +1,15 @@
-# 🤖 Digital Human AI Tutor for Kids (Android + Gemini Live)
+# 🤖 Havs Robot — AI Tutor for Kids (Android + Gemini Live)
 
-Dự án trợ lý ảo Digital Human 2D Doraemon cho trẻ em từ 5–12 tuổi. Tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp (không cần LiveKit hay dịch vụ trung gian đắt tiền).
+Dự án trợ lý ảo AI Havs Robot cho trẻ em từ 5–12 tuổi. Tích hợp **Google Gemini Multimodal Live API** qua kết nối WebSocket 2 chiều trực tiếp (không cần LiveKit hay dịch vụ trung gian đắt tiền).
 
 ## 🎯 Hai chế độ hoạt động
 
 ### 1️⃣ Chế độ Bách khoa toàn thư (Encyclopedia Mode) — Knowledge
-Doraemon đóng vai một cuốn bách khoa toàn thư sinh động, trả lời các câu hỏi về **lịch sử, địa lý, khoa học tự nhiên, vũ trụ, thiên văn, động vật, nhân vật nổi tiếng…**
+Havs Robot đóng vai một cuốn bách khoa toàn thư sinh động, trả lời các câu hỏi về **lịch sử, địa lý, khoa học tự nhiên, vũ trụ, thiên văn, động vật, nhân vật nổi tiếng…**
 
 Cơ chế hoạt động:
-- Khi bé hỏi "Hai Bà Trưng là ai?" nhưng **câu hỏi mơ hồ**, Doraemon sẽ tự động hỏi lại với 2–4 lựa chọn chủ đề hiển thị dưới dạng **chip bar** trên màn hình Android. Bé chỉ cần chạm vào chip phù hợp.
-- Khi chủ đề đã rõ (do bé nói rõ, hoặc sau khi hỏi lại), Doraemon gọi tool `search` để tìm **top 3 kết quả** đáng tin cậy nhất (Google Programmable Search Engine primary, fallback Wikipedia Simple English khi CSE không khả dụng).
+- Khi bé hỏi "Hai Bà Trưng là ai?" nhưng **câu hỏi mơ hồ**, Havs Robot sẽ tự động hỏi lại với 2–4 lựa chọn chủ đề hiển thị dưới dạng **chip bar** trên màn hình Android. Bé chỉ cần chạm vào chip phù hợp.
+- Khi chủ đề đã rõ (do bé nói rõ, hoặc sau khi hỏi lại), Havs Robot gọi tool `search` để tìm **top 3 kết quả** đáng tin cậy nhất (Google Programmable Search Engine primary, fallback Wikipedia Simple English khi CSE không khả dụng).
 - Gemini tổng hợp 3 kết quả thành một đoạn văn ngắn gọn **3–5 câu**, ngôn ngữ thân thiện với trẻ em, xen lẫn 1–2 từ tiếng Anh về chủ đề.
 - Mọi URL đều qua bộ lọc an toàn trẻ em `ChildSafetyGuard.assert_safe_url()` — chỉ whitelist mới được phép.
 - **Cache in-memory 1 giờ** giúp tiết kiệm quota Google CSE và giảm độ trễ trả lời cho câu hỏi lặp lại.
@@ -21,7 +21,7 @@ Giữ nguyên toàn bộ tính năng English Buddy nguyên bản:
 - Lưu hồ sơ bé (tên, sở thích, gia đình, thú cưng…)
 - Theo dõi tiến độ học tập (`learning_progress`)
 
-**Doraemon tự động nhận diện chế độ** dựa trên nội dung câu hỏi — KHÔNG cần nhấn nút chuyển. Câu hỏi kiến thức → Encyclopedia. Trò chuyện / học tiếng Anh → English mode. Hai chế độ chuyển qua lại linh hoạt trong cùng 1 phiên.
+**Havs Robot tự động nhận diện chế độ** dựa trên nội dung câu hỏi — KHÔNG cần nhấn nút chuyển. Câu hỏi kiến thức → Encyclopedia. Trò chuyện / học tiếng Anh → English mode. Hai chế độ chuyển qua lại linh hoạt trong cùng 1 phiên.
 
 ---
 
@@ -68,7 +68,7 @@ GOOGLE_CSE_KEY=your_api_key_here
 [Điện thoại Android (Kotlin/Compose)]
   │ • AudioRecord (16kHz PCM)
   │ • Silero VAD on-device (phát hiện nói/không nói)
-  │ • 2D Doraemon Canvas (Lip-sync real-time theo âm lượng)
+  │ • 2D Havs Robot Canvas (Lip-sync real-time theo âm lượng)
   │ • AudioTrack (24kHz PCM playback)
   │
   │ ▲ WebSocket 2 chiều (WSS)
@@ -112,17 +112,17 @@ human-digital/
             ├── network/
             │   └── GeminiLiveClient.kt # OkHttp WebSocket Client (+ clarification events)
             └── ui/
-                ├── DoraemonAvatar.kt   # Doraemon vẽ bằng Jetpack Compose
+                ├── DoraemonAvatar.kt   # Havs Robot vẽ bằng Jetpack Compose
                 └── MainActivity.kt     # ⭐ UI chính + ClarificationChipBar (Encyclopedia chip)
 ```
 
 ## 🧒 Cá nhân hóa từng bé
 
-Mỗi bé là một hồ sơ riêng (tên, tuổi, sở thích, gia đình, **tính cách**). Doraemon dùng hồ sơ này để điều chỉnh giọng điệu và cách động viên cho đúng từng bé.
+Mỗi bé là một hồ sơ riêng (tên, tuổi, sở thích, gia đình, **tính cách**). Havs Robot dùng hồ sơ này để điều chỉnh giọng điệu và cách động viên cho đúng từng bé.
 
 - Phụ huynh mở trang **`http://<backend>:8000/config`**, nhập `ADMIN_API_KEY` + `child_id`, điền hồ sơ và bấm **Lưu**.
 - Android app truyền `child_id` qua WebSocket URL (`ws://<backend>:8000/ws/live?child_id=...`) để gắn đúng hồ sơ.
-- Trường `personality` (tính cách / phong cách giao tiếp) được đưa vào system prompt để Doraemon "hiểu" bé.
+- Trường `personality` (tính cách / phong cách giao tiếp) được đưa vào system prompt để Havs Robot "hiểu" bé.
 
 ## 🎤 Lưu ý VAD on-device
 

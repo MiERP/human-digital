@@ -151,7 +151,7 @@ class TestChildMemoryAndSafety(unittest.TestCase):
         profile = self.memory.get_or_create_profile(child_id)
         self.assertEqual(profile["gender"], "female")
 
-        # Context phải chứa giới tính để Doraemon xưng hô đúng
+        # Context phải chứa giới tính để Havs Robot xưng hô đúng
         context = self.memory.build_memory_context(child_id)
         self.assertIn("girl", context)
         self.assertIn("hoạt bát", context)
@@ -261,7 +261,7 @@ class TestChildMemoryAndSafety(unittest.TestCase):
         client = TestClient(app)
         child_id = "kid_api_test_01"
         self.memory.get_or_create_profile(child_id, default_name="Bé Bơ")
-        self.memory.log_session(child_id, duration_seconds=180, summary="Làm quen với Doraemon")
+        self.memory.log_session(child_id, duration_seconds=180, summary="Làm quen với Havs Robot")
 
         response = client.get(f"/api/child/digest?child_id={child_id}")
         self.assertEqual(response.status_code, 200)

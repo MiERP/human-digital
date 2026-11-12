@@ -52,7 +52,7 @@ import androidx.compose.ui.draw.clip
 
 /**
  * Màn hình cấu hình hồ sơ bé — chỉ hiện 1 lần khi bắt đầu sử dụng app
- * hoặc sau khi reset cấu hình. Dữ liệu này là nguồn cá nhân hóa cho Doraemon.
+ * hoặc sau khi reset cấu hình. Dữ liệu này là nguồn cá nhân hóa cho Havs Robot.
  *
  * - Tên: textbox
  * - Tuổi & giới tính: dropdown
@@ -134,7 +134,7 @@ fun SetupScreen(
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Doraemon rất muốn làm bạn với bé. Bố mẹ hãy điền thông tin giúp bé nhé!",
+            text = "Havs Robot rất muốn làm bạn với bé. Bố mẹ hãy điền thông tin giúp bé nhé!",
             color = Color.White.copy(alpha = 0.95f),
             fontSize = 13.sp,
             textAlign = TextAlign.Center
@@ -233,7 +233,7 @@ fun SetupScreen(
             )
         ) {
             Text(
-                text = if (isSubmitting) "Đang lưu..." else "Bắt đầu trò chuyện với Doraemon",
+                text = if (isSubmitting) "Đang lưu..." else "Bắt đầu trò chuyện với Havs Robot",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White

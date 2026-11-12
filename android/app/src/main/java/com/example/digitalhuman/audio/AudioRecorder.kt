@@ -55,14 +55,14 @@ class AudioRecorder(
         // Chốt "bé bắt đầu nói" trong điều kiện bình thường: 2 frames (~64ms) để nhận diện nhanh.
         private const val SPEECH_ONSET_FRAMES_NORMAL = 2
 
-        // Trong 800ms ngay sau khi Doraemon phát âm thanh, cần 4 frames (~128ms) để
+        // Trong 800ms ngay sau khi Havs Robot phát âm thanh, cần 4 frames (~128ms) để
         // triệt tiêu tuyệt đối rủi ro tiếng vang phòng (room reverb) kích hoạt giả mạo ngắt lời.
         private const val SPEECH_ONSET_FRAMES_POST_PLAYBACK = 4
 
         // Fallback khi Silero VAD không khởi tạo được.
         private const val RMS_FALLBACK_THRESHOLD = 0.035f
 
-        // Gia hạn echo gate sau khi Doraemon dứt lời thực tế trên loa (450ms) để tiêu tán toàn bộ tiếng vang phòng.
+        // Gia hạn echo gate sau khi Havs Robot dứt lời thực tế trên loa (450ms) để tiêu tán toàn bộ tiếng vang phòng.
         private const val PLAYBACK_GRACE_MS = 450L
     }
 
@@ -183,7 +183,7 @@ class AudioRecorder(
                 }
 
                 if (isGated) {
-                    // Micro đang bị khoá (Doraemon đang suy nghĩ hoặc đang phát âm thanh):
+                    // Micro đang bị khoá (Havs Robot đang suy nghĩ hoặc đang phát âm thanh):
                     // KHÔNG nhận diện giọng nói, xóa sạch đệm pre-roll để không lọt tiếng vang loa hoặc tạp âm phòng.
                     // Đặt userSpeaking = false mà KHÔNG gọi onSpeechEnded() để tránh gửi activity_end giả mạo làm Gemini bị interrupted!
                     speechOnsetFrames = 0
@@ -198,7 +198,7 @@ class AudioRecorder(
                             preRoll.removeFirst()
                         }
 
-                        // Debounce thích ứng: Trong 800ms sau khi Doraemon phát âm thanh, cần 4 frame (~128ms)
+                        // Debounce thích ứng: Trong 800ms sau khi Havs Robot phát âm thanh, cần 4 frame (~128ms)
                         // để chống tiếng vang phòng kích hoạt ngắt lời giả. Bình thường chỉ cần 2 frame (~64ms).
                         val timeSincePlayback = now - lastPlaybackChunkTime
                         val requiredOnset = if (timeSincePlayback < 800L) {

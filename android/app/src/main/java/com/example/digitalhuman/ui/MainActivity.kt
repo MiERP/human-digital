@@ -154,7 +154,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        volumeControlStream = android.media.AudioManager.STREAM_VOICE_CALL
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val localSetupDone = prefs.getBoolean(KEY_SETUP_DONE, false)
@@ -561,7 +561,7 @@ fun TutorScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Doraemon ngủ 120s chờ wake word; hết giờ không ai gọi → thoát app hoàn toàn.
+    // Havs Robot ngủ 120s chờ wake word; hết giờ không ai gọi → thoát app hoàn toàn.
     val SLEEP_TIMEOUT_MS = 120_000L
     val TAG = "TutorScreen"
 
@@ -573,7 +573,7 @@ fun TutorScreen(
     // Đồng hồ ngủ: sau session_ended, đếm 120s chờ wake word rồi thoát app.
     var sleepJob by remember { mutableStateOf<Job?>(null) }
 
-    // Trạng thái cảm xúc + năng lượng của Doraemon (do backend EmotionEngine đẩy về).
+    // Trạng thái cảm xúc + năng lượng của Havs Robot (do backend EmotionEngine đẩy về).
     var robotEmotion by remember { mutableStateOf(RobotEmotion()) }
 
     // Encyclopedia Mode: state cho chip bar hỏi chủ đề
@@ -609,39 +609,6 @@ fun TutorScreen(
             block()
         } else {
             mainHandler.post(block)
-        }
-    }
-
-    fun setSpeakerphoneRouting(enable: Boolean) {
-        try {
-            val audioManager = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
-            if (enable) {
-                audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                    val speakerDevice = audioManager.availableCommunicationDevices.firstOrNull {
-                        it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-                    }
-                    if (speakerDevice != null) {
-                        audioManager.setCommunicationDevice(speakerDevice)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        audioManager.isSpeakerphoneOn = true
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    audioManager.isSpeakerphoneOn = true
-                }
-            } else {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                    audioManager.clearCommunicationDevice()
-                } else {
-                    @Suppress("DEPRECATION")
-                    audioManager.isSpeakerphoneOn = false
-                }
-                audioManager.mode = android.media.AudioManager.MODE_NORMAL
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Speakerphone routing error: ${e.message}")
         }
     }
 
@@ -750,7 +717,7 @@ fun TutorScreen(
                     sleepJob?.cancel()
                     sleepJob = scope.launch {
                         delay(SLEEP_TIMEOUT_MS)
-                        Log.i(TAG, "Doraemon slept ${SLEEP_TIMEOUT_MS}ms — exiting app.")
+                        Log.i(TAG, "Havs Robot slept ${SLEEP_TIMEOUT_MS}ms — exiting app.")
                         (context as? Activity)?.finishAndRemoveTask()
                     }
                 }
@@ -797,7 +764,7 @@ fun TutorScreen(
         }
     }
 
-    // Quản lý CameraX streaming 1 FPS cho "Mắt Thần Doraemon" (Cloud Multimodal)
+    // Quản lý CameraX streaming 1 FPS cho "Mắt Thần Havs Robot" (Cloud Multimodal)
     val cameraStreamManager = remember(client) {
         CameraStreamManager(context = context) { jpegBytes ->
             client.sendVideoFrame(jpegBytes)
@@ -810,9 +777,9 @@ fun TutorScreen(
     ) { isGranted ->
         if (isGranted) {
             isCameraActive = true
-            Toast.makeText(context, "👁️ Đã bật Mắt Thần! Hãy giơ tranh vẽ hoặc đồ vật cho Doraemon xem nhé!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "👁️ Đã bật Mắt Thần! Hãy giơ tranh vẽ hoặc đồ vật cho Havs Robot xem nhé!", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "Cần cấp quyền Camera để Doraemon có thể nhìn thấy đồ vật/bài tập của bé!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Cần cấp quyền Camera để Havs Robot có thể nhìn thấy đồ vật/bài tập của bé!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -860,7 +827,7 @@ fun TutorScreen(
                 client.notifyActivityStart()
                 runOnMain {
                     if (connectionState == ConnectionState.SPEAKING || audioPlayer.isPlayingOrPending) {
-                        // Barge-in: bé nói xen vào khi Doraemon đang phát âm thanh -> dừng phát tức thì
+                        // Barge-in: bé nói xen vào khi Havs Robot đang phát âm thanh -> dừng phát tức thì
                         audioPlayer.stopAndFlush()
                     }
                     if (connectionState != ConnectionState.SLEEPING) {
@@ -881,31 +848,17 @@ fun TutorScreen(
         ).also { audioRecorderRef = it }
     }
 
-    fun startSession() {
-        isSessionActive = true
-        setSpeakerphoneRouting(true)
-        audioPlayer.start(scope)
-        client.connect()
-        audioRecorder.startRecording(scope)
-    }
-
-    fun stopSession() {
-        isSessionActive = false
-        isCameraActive = false
-        audioRecorder.stopRecording()
-        audioPlayer.stopAndFlush()
-        client.disconnect()
-        setSpeakerphoneRouting(false)
-    }
-
     // Permission launcher cho Micro & Camera
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            startSession()
+            isSessionActive = true
+            audioPlayer.start(scope)
+            client.connect()
+            audioRecorder.startRecording(scope)
         } else {
-            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với Doraemon!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Cần cấp quyền Micro để trò chuyện với Havs Robot!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -914,7 +867,9 @@ fun TutorScreen(
             sleepJob?.cancel()
             faceEmotionManager.release()
             cameraStreamManager.release()
-            stopSession()
+            audioRecorder.stopRecording()
+            audioPlayer.release()
+            client.disconnect()
         }
     }
 
@@ -924,7 +879,7 @@ fun TutorScreen(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF38BDF8), // Xanh da trời Doraemon tươi sáng
+                        Color(0xFF38BDF8), // Xanh da trời Havs Robot tươi sáng
                         Color(0xFF0284C7),
                         Color(0xFFBAE6FD)  // Xanh mây nhạt ấm áp
                     )
@@ -942,7 +897,7 @@ fun TutorScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Huy hiệu Doraemon vui nhộn
+            // Huy hiệu Havs Robot vui nhộn
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -953,7 +908,7 @@ fun TutorScreen(
                 Text("🐱", fontSize = 16.sp)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "DORAEMON",
+                    text = "HAVS ROBOT",
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
@@ -1014,13 +969,13 @@ fun TutorScreen(
             AlertDialog(
                 onDismissRequest = { showPrivacyInfoDialog = false },
                 title = {
-                    Text("🔒 Đôi Mắt Doraemon & Quyền Riêng Tư", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+                    Text("🔒 Đôi Mắt Havs Robot & Quyền Riêng Tư", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
                 },
                 containerColor = Color(0xFF0F172A),
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "Doraemon đang sử dụng Camera trước để quan sát nụ cười và cảm xúc của bé, giúp bạn robot trò chuyện thấu cảm và thân thiện hơn.",
+                            text = "Havs Robot đang sử dụng Camera trước để quan sát nụ cười và cảm xúc của bé, giúp bạn robot trò chuyện thấu cảm và thân thiện hơn.",
                             fontSize = 13.sp,
                             color = Color(0xFFE2E8F0)
                         )
@@ -1143,14 +1098,14 @@ fun TutorScreen(
             )
         }
 
-        // 2. Khu vực trung tâm: Doraemon bồng bềnh + Khung Gương Mắt Thần
+        // 2. Khu vực trung tâm: Havs Robot bồng bềnh + Khung Gương Mắt Thần
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
             contentAlignment = Alignment.Center
         ) {
-            // Doraemon Avatar 2D sống động với biểu cảm và hào quang
+            // Havs Robot Avatar 2D sống động với biểu cảm và hào quang
             DoraemonAvatar(
                 state = connectionState,
                 amplitude = robotAmplitude,
@@ -1321,7 +1276,10 @@ fun TutorScreen(
                 onClick = {
                     if (connectionState == ConnectionState.SLEEPING) {
                         client.wakeUp()
-                        startSession()
+                        isSessionActive = true
+                        audioPlayer.start(scope)
+                        client.connect()
+                        audioRecorder.startRecording(scope)
                     } else if (!isSessionActive) {
                         val hasPermission = ContextCompat.checkSelfPermission(
                             context,
@@ -1329,12 +1287,19 @@ fun TutorScreen(
                         ) == PackageManager.PERMISSION_GRANTED
 
                         if (hasPermission) {
-                            startSession()
+                            isSessionActive = true
+                            audioPlayer.start(scope)
+                            client.connect()
+                            audioRecorder.startRecording(scope)
                         } else {
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     } else {
-                        stopSession()
+                        isSessionActive = false
+                        isCameraActive = false
+                        audioRecorder.stopRecording()
+                        audioPlayer.stopAndFlush()
+                        client.disconnect()
                     }
                 }
             )
@@ -1381,7 +1346,10 @@ fun TutorScreen(
             onTopicSelected = { topic ->
                 showTopicSheet = false
                 if (!isSessionActive) {
-                    startSession()
+                    isSessionActive = true
+                    audioPlayer.start(scope)
+                    client.connect()
+                    audioRecorder.startRecording(scope)
                 }
                 client.selectTopic(topic.title, topic.promptHint)
             }
@@ -1390,7 +1358,7 @@ fun TutorScreen(
 }
 
 /**
- * Tạo văn bản động cho khung thoại Manga theo trạng thái và cảm xúc của Doraemon.
+ * Tạo văn bản động cho khung thoại Manga theo trạng thái và cảm xúc của Havs Robot.
  */
 private fun getDoraemonSpeechText(
     state: ConnectionState,
@@ -1403,29 +1371,29 @@ private fun getDoraemonSpeechText(
     }
     if (state == ConnectionState.LISTENING) {
         return when (childEmotion) {
-            "happy" -> "Doraemon thấy bé đang cười vui lắm nè! Kể cho mình nghe với nha! 😊✨"
-            "confused" -> "Đừng lo nhé, có Doraemon ở đây rồi! Có câu hỏi nào khó cứ hỏi mình nha! 💡"
-            "sleepy" -> "Bé ơi, bé có thấy mệt không? Cứ thoải mái tâm sự với Doraemon nhé! 🌙"
-            "focused" -> "Bé đang chăm chú làm bài ghê! Doraemon luôn ở bên cạnh bé nè! ✍️"
-            else -> "Doraemon đang chăm chú lắng nghe bé nói nè! Hãy nói gì đó với mình nhé! 👂"
+            "happy" -> "Havs Robot thấy bé đang cười vui lắm nè! Kể cho mình nghe với nha! 😊✨"
+            "confused" -> "Đừng lo nhé, có Havs Robot ở đây rồi! Có câu hỏi nào khó cứ hỏi mình nha! 💡"
+            "sleepy" -> "Bé ơi, bé có thấy mệt không? Cứ thoải mái tâm sự với Havs Robot nhé! 🌙"
+            "focused" -> "Bé đang chăm chú làm bài ghê! Havs Robot luôn ở bên cạnh bé nè! ✍️"
+            else -> "Havs Robot đang chăm chú lắng nghe bé nói nè! Hãy nói gì đó với mình nhé! 👂"
         }
     }
     return when (state) {
-        ConnectionState.SLEEPING -> "Khò khò... Doraemon đang ngủ một lát. Chúc bé ngủ ngon nha! Zzz... 🌙"
-        ConnectionState.THINKING -> "Aha, câu hỏi hay quá! Doraemon đang suy nghĩ câu trả lời cho bạn nhỏ nè... 🤔💡"
+        ConnectionState.SLEEPING -> "Khò khò... Havs Robot đang ngủ một lát. Chúc bé ngủ ngon nha! Zzz... 🌙"
+        ConnectionState.THINKING -> "Aha, câu hỏi hay quá! Havs Robot đang suy nghĩ câu trả lời cho bạn nhỏ nè... 🤔💡"
         ConnectionState.SPEAKING -> {
             when (emotion.emotion) {
-                "excited" -> "Woohoo! Tuyệt vời quá bé ơi! Cùng Doraemon khám phá tiếp nào! 🎉"
-                "proud" -> "Bé thông minh và giỏi quá! Doraemon tự hào về bé lắm! 🌟"
-                "surprised" -> "Ôi ngạc nhiên chưa! Doraemon vừa học thêm một điều thú vị từ bé đấy! 😮"
-                "displeased" -> "Hừm, bé trêu Doraemon đấy à? Đùa xíu thôi, Doraemon thương bé nhất! 😋"
-                "sad" -> "Đừng buồn nhé, có Doraemon luôn ở bên cạnh bé nè! Cố lên nào! ❤️"
-                else -> "Doraemon đang kể cho bé nghe nè, bé lắng nghe nhé! 💬"
+                "excited" -> "Woohoo! Tuyệt vời quá bé ơi! Cùng Havs Robot khám phá tiếp nào! 🎉"
+                "proud" -> "Bé thông minh và giỏi quá! Havs Robot tự hào về bé lắm! 🌟"
+                "surprised" -> "Ôi ngạc nhiên chưa! Havs Robot vừa học thêm một điều thú vị từ bé đấy! 😮"
+                "displeased" -> "Hừm, bé trêu Havs Robot đấy à? Đùa xíu thôi, Havs Robot thương bé nhất! 😋"
+                "sad" -> "Đừng buồn nhé, có Havs Robot luôn ở bên cạnh bé nè! Cố lên nào! ❤️"
+                else -> "Havs Robot đang kể cho bé nghe nè, bé lắng nghe nhé! 💬"
             }
         }
         ConnectionState.CONNECTING -> "Đang mở Cửa Thần Kỳ kết nối đến thế giới tương lai... 🚀"
         ConnectionState.ERROR -> "Ôi Cửa Thần Kỳ bị nghẽn một chút, bé thử chạm lại Chuông Vàng nhé! 🔧"
-        else -> "Doraemon sẵn sàng rồi! Chúng mình cùng học tiếng Anh và khám phá khoa học nha! 🎈"
+        else -> "Havs Robot sẵn sàng rồi! Chúng mình cùng học tiếng Anh và khám phá khoa học nha! 🎈"
     }
 }
 
@@ -1558,7 +1526,7 @@ fun MagicBellButton(
             )
         }
 
-        // Quả Chuông Vàng Doraemon 3D
+        // Quả Chuông Vàng Havs Robot 3D
         Box(
             modifier = Modifier
                 .size(76.dp)
@@ -1679,7 +1647,7 @@ data class LearningWordCue(
 )
 
 /**
- * Thẻ từ vựng bảo bối nổi bật trên màn hình khi Doraemon sửa lỗi hoặc ghi nhận từ mới (Multimodal Visual Scaffolding).
+ * Thẻ từ vựng bảo bối nổi bật trên màn hình khi Havs Robot sửa lỗi hoặc ghi nhận từ mới (Multimodal Visual Scaffolding).
  */
 @Composable
 fun LearningWordBadgeOverlay(
@@ -1833,7 +1801,7 @@ fun TopicDiscoveryModal(
                                     color = Color(0xFF0284C7)
                                 )
                                 Text(
-                                    text = "Bé muốn cùng Doraemon khám phá gì nào?",
+                                    text = "Bé muốn cùng Havs Robot khám phá gì nào?",
                                     fontSize = 11.sp,
                                     color = Color(0xFF64748B)
                                 )
@@ -1866,7 +1834,7 @@ fun TopicDiscoveryModal(
                                 CircularProgressIndicator(color = Color(0xFF0284C7))
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Text(
-                                    text = "Doraemon đang mở túi thần kỳ... ✨",
+                                    text = "Havs Robot đang mở túi thần kỳ... ✨",
                                     fontSize = 12.sp,
                                     color = Color(0xFF0284C7),
                                     fontWeight = FontWeight.Medium

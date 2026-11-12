@@ -1,16 +1,16 @@
-"""Doraemon Emotion Engine — "trái tim" cảm xúc của Doraemon.
+"""Havs Robot Emotion Engine — "trái tim" cảm xúc của Havs Robot.
 
 Lớp trạng thái nội tâm chạy ở backend, lưu riêng theo từng bé (child_id):
 - Cảm xúc (emotion): happy, surprised, strict, displeased, sad, neutral
 - Năng lượng (energy): energetic, excited, sleepy, drowsy, tired, neutral
 
 Động cơ (drivers):
-1. Nhịp ngày — giờ địa phương quyết định năng lượng nền của Doraemon.
+1. Nhịp ngày — giờ địa phương quyết định năng lượng nền của Havs Robot.
 2. Model chủ động đổi trạng thái qua tool `set_emotion` (Gemini Live function call).
 3. Cảm xúc mạnh tự suy giảm dần về neutral (decay), năng lượng override có TTL.
-4. Phiên nói dài làm Doraemon mệt dần (fatigue); nghỉ ngơi thì hồi phục.
+4. Phiên nói dài làm Havs Robot mệt dần (fatigue); nghỉ ngơi thì hồi phục.
 
-Mọi trạng thái được lưu vào data/emotions/{child_id}.json nên Doraemon "nhớ"
+Mọi trạng thái được lưu vào data/emotions/{child_id}.json nên Havs Robot "nhớ"
 cảm xúc của mình qua các phiên — nền tảng cho việc "lớn lên cùng bé".
 """
 
@@ -49,14 +49,14 @@ ENERGY_LABELS_VN = {
 EMOTION_HALF_LIFE_SECONDS = 240.0
 # Năng lượng do model đặt (override) sẽ tự hết hạn và quay về nhịp ngày.
 ENERGY_OVERRIDE_TTL_SECONDS = 900.0
-# Mỗi lượt nói của bé làm Doraemon mệt thêm một chút (rất nhẹ để không bị kiệt sức sớm).
+# Mỗi lượt nói của bé làm Havs Robot mệt thêm một chút (rất nhẹ để không bị kiệt sức sớm).
 FATIGUE_PER_TURN = 0.005
 FATIGUE_RECOVERY_PER_MINUTE = 0.05
 FATIGUE_TIRED_THRESHOLD = 0.85
 
 
 def _energy_baseline_for_hour(hour: int) -> str:
-    """Nhịp sinh hoạt của Doraemon theo giờ trong ngày (giờ địa phương)."""
+    """Nhịp sinh hoạt của Havs Robot theo giờ trong ngày (giờ địa phương)."""
     if 6 <= hour < 21:
         return "energetic"   # Ban ngày luôn vui vẻ, hoạt bát cùng bé
     if 21 <= hour < 22:
@@ -96,7 +96,7 @@ class EmotionEngine:
         }
 
     def start_session(self, child_id: str) -> Dict:
-        """Khởi động phiên trò chuyện mới — Doraemon luôn tràn đầy năng lượng tươi vui."""
+        """Khởi động phiên trò chuyện mới — Havs Robot luôn tràn đầy năng lượng tươi vui."""
         s = self._fresh()
         self._save(child_id, s)
         state = self._effective(s)
@@ -195,7 +195,7 @@ class EmotionEngine:
         return state
 
     def record_turn(self, child_id: str) -> Dict:
-        """Gọi khi Doraemon hoàn thành một lượt nói — tích lũy mệt mỏi nhẹ."""
+        """Gọi khi Havs Robot hoàn thành một lượt nói — tích lũy mệt mỏi nhẹ."""
         s = self._load(child_id)
         s["fatigue"] = min(1.0, s["fatigue"] + FATIGUE_PER_TURN)
         s["last_turn_at"] = time.time()
@@ -209,11 +209,11 @@ class EmotionEngine:
         emotion = EMOTION_LABELS_VN.get(state["emotion"], state["emotion"])
         energy = ENERGY_LABELS_VN.get(state["energy"], state["energy"])
         return (
-            f"- Trạng thái cảm xúc hiện tại của Doraemon: {emotion} "
+            f"- Trạng thái cảm xúc hiện tại của Havs Robot: {emotion} "
             f"(cường độ {int(state['intensity'] * 100)}%). "
             f"Năng lượng: {energy}. "
             f"Mức mệt mỏi tích lũy: {int(state['fatigue'] * 100)}%.\n"
             f"- Hãy diễn tả giọng nói và nội dung cho khớp với trạng thái này, "
-            f"và gọi tool set_emotion khi cảm xúc hoặc năng lượng của Doraemon "
+            f"và gọi tool set_emotion khi cảm xúc hoặc năng lượng của Havs Robot "
             f"thay đổi đáng kể."
         )

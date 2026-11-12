@@ -64,7 +64,7 @@ dependencies {
     // On-device Voice Activity Detection (Silero VAD)
     implementation("com.github.gkonovalov.android-vad:silero:2.0.10")
 
-    // CameraX (Mắt Thần Doraemon)
+    // CameraX (Mắt Thần Havs Robot)
     val cameraVersion = "1.3.4"
     implementation("androidx.camera:camera-core:$cameraVersion")
     implementation("androidx.camera:camera-camera2:$cameraVersion")

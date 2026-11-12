@@ -16,7 +16,7 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.Executors
 
 /**
- * Quản lý "Đôi Mắt Cảm Xúc" (Edge AI Emotional Vision) của Doraemon:
+ * Quản lý "Đôi Mắt Cảm Xúc" (Edge AI Emotional Vision) của Havs Robot:
  * - Chạy ngầm phân tích khuôn mặt bé qua Camera trước bằng Google ML Kit.
  * - Xử lý 100% CỤC BỘ trên chip máy (Snapdragon 680), KHÔNG gửi hình ảnh lên mạng.
  * - Tần số phân tích: 2 FPS (500ms / frame), độ trễ suy luận chỉ ~12-18ms.

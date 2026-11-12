@@ -388,7 +388,7 @@ class MemoryManager:
     def build_memory_context(self, child_id: str = "default_child") -> str:
         """
         Tạo đoạn ngữ cảnh ngắn gọn (<250 tokens) tối ưu để nhúng vào System Prompt của Gemini Live.
-        Giúp Doraemon nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
+        Giúp Havs Robot nhận diện ngay bé là ai, sở thích gì và cần ôn từ nào.
         """
         profile = self.get_or_create_profile(child_id)
         recent_memories = self.get_recent_memories(child_id, limit=3)
@@ -429,7 +429,7 @@ class MemoryManager:
             lines.append(f"- Hobbies/Interests: {', '.join(hobbies)}")
 
         if recent_memories:
-            lines.append("- Recent Life Memories with Doraemon:")
+            lines.append("- Recent Life Memories with Havs Robot:")
             for m in recent_memories:
                 lines.append(f"  * [{m['category']}] {m['content']}")
 
@@ -444,12 +444,12 @@ class MemoryManager:
         if streak > 1:
             lines.append(f"- Streak: Bé đang có chuỗi {streak} ngày học liên tiếp! Hãy khen ngợi tinh thần chăm chỉ của bé!")
         elif total_sessions == 0:
-            lines.append("- Session: Đây là buổi đầu tiên bé làm quen với Doraemon. Hãy mở đầu thật hào hứng, ấm áp và thân thiện!")
+            lines.append("- Session: Đây là buổi đầu tiên bé làm quen với Havs Robot. Hãy mở đầu thật hào hứng, ấm áp và thân thiện!")
 
         last_session = self.get_last_session_summary(child_id)
         if last_session and last_session.get("summary"):
             lines.append(
-                "- Cuối buổi trò chuyện lần trước, Doraemon và bé đã chốt lại: "
+                "- Cuối buổi trò chuyện lần trước, Havs Robot và bé đã chốt lại: "
                 f"{last_session['summary']} "
                 "(hãy nhắc lại tự nhiên đầu buổi hôm nay như một kỷ niệm chung)."
             )
@@ -467,7 +467,7 @@ class MemoryManager:
     ) -> int:
         """Chốt lại một buổi trò chuyện: tổng kết buổi + thời lượng + cập nhật Streak.
 
-        Lưu vào session_logs để Doraemon nhớ buổi trước đã làm gì và tính chuỗi
+        Lưu vào session_logs để Havs Robot nhớ buổi trước đã làm gì và tính chuỗi
         ngày học liên tiếp (Streak) nhằm khuyến khích thói quen học tập của trẻ.
         """
         with self._get_connection() as conn:
@@ -580,14 +580,14 @@ class MemoryManager:
             {
                 "id": "first_step",
                 "name": "🌱 Bước Chân Đầu Tiên",
-                "desc": "Hoàn thành buổi trò chuyện đầu tiên với Doraemon",
+                "desc": "Hoàn thành buổi trò chuyện đầu tiên với Havs Robot",
                 "icon": "🌱",
                 "unlocked": total_sessions >= 1
             },
             {
                 "id": "streak_3",
                 "name": "🔥 Chăm Chỉ 3 Ngày",
-                "desc": "Trò chuyện cùng Doraemon 3 ngày liên tiếp",
+                "desc": "Trò chuyện cùng Havs Robot 3 ngày liên tiếp",
                 "icon": "🔥",
                 "unlocked": streak_days >= 3
             },
@@ -632,7 +632,7 @@ class MemoryManager:
         elif streak_days > 0:
             advice = f"{child_name} đang duy trì thói quen học tập rất đều đặn! Hãy tiếp tục động viên bé mỗi ngày."
         else:
-            advice = f"Hãy cùng {child_name} mở Doraemon trò chuyện 5-10 phút mỗi ngày để tạo phản xạ giao tiếp tự tin nhé!"
+            advice = f"Hãy cùng {child_name} mở ứng dụng Havs Robot và trò chuyện 5-10 phút mỗi ngày để tạo phản xạ giao tiếp tự tin nhé!"
 
         return {
             "child_id": child_id,
@@ -707,7 +707,7 @@ class MemoryManager:
                 "emoji": "🐾",
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
-                "description": f"Cùng Doraemon khám phá những bí mật siêu đáng yêu về {fav_animal}!",
+                "description": f"Cùng Havs Robot khám phá những bí mật siêu đáng yêu về {fav_animal}!",
                 "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: Thế giới loài {fav_animal} (sở thích của bé). Hãy mở đầu bằng một câu chào vui tươi, chia sẻ 1 bí mật bất ngờ về {fav_animal} và đố bé 1 câu hỏi gợi mở nhé!]"
             })
         elif hobbies:
@@ -719,7 +719,7 @@ class MemoryManager:
                 "emoji": "🎨",
                 "color_hex": "#F472B6",
                 "tag": "Sở thích của bé",
-                "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Doraemon!",
+                "description": f"Khám phá thế giới {hobby_0} tràn ngập niềm vui cùng Havs Robot!",
                 "prompt_hint": f"[Bé vừa chọn khám phá chủ đề: {hobby_0} (sở thích của bé). Hãy mở đầu thân thiện, hỏi bé về sở thích này và đố bé một câu đố vui nhé!]"
             })
         else:

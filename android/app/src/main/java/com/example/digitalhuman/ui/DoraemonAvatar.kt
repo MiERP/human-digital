@@ -147,7 +147,7 @@ fun DoraemonAvatar(
         ) { drawableId ->
             Image(
                 painter = painterResource(id = drawableId),
-                contentDescription = "Doraemon Avatar",
+                contentDescription = "Havs Robot Avatar",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
             )
