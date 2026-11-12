@@ -1,38 +1,46 @@
+# Havs Robot (Doraemon English Buddy) — chạy trên VPS qua vps-panel.
+# Panel tự thêm mapping 127.0.0.1:<cổng nội bộ>:1406, nên KHÔNG khai báo ports.
+
 services:
-  backend:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "${PORT:-8000}:8000"
-    environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-native-audio-latest}
-      - GEMINI_VOICE=${GEMINI_VOICE:-Leda}
-      - ENABLE_TRANSCRIPTION=${ENABLE_TRANSCRIPTION:-true}
-      - ENABLE_AFFECTIVE_DIALOG=${ENABLE_AFFECTIVE_DIALOG:-true}
-      - CLIENT_VAD_MODE=${CLIENT_VAD_MODE:-true}
-      - VAD_START_SENSITIVITY=${VAD_START_SENSITIVITY:-high}
-      - VAD_END_SENSITIVITY=${VAD_END_SENSITIVITY:-low}
-      - VAD_SILENCE_DURATION_MS=${VAD_SILENCE_DURATION_MS:-1000}
-      - VAD_PREFIX_PADDING_MS=${VAD_PREFIX_PADDING_MS:-200}
-      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
-      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID:-}
-      - GOOGLE_CSE_KEY=${GOOGLE_CSE_KEY:-}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
-      - ENV=production
-      - HOST=0.0.0.0
-      - PORT=8000
-    volumes:
-      - app_data:/app/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
-volumes:
-  app_data:
-    driver: local
+    # Tạo /opt/apps/havs-robot/.env trên VPS (GEMINI_API_KEY, ADMIN_API_KEY...)
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      ENV: production
+      HOST: 0.0.0.0
+      PORT: "1406"
+
+      # CORS/WebSocket cho tên miền thật
+      ALLOWED_ORIGINS: https://havs-robot.103-20-102-229.sslip.io,http://127.0.0.1:1406
+
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-native-audio-latest}
+      GEMINI_VOICE: ${GEMINI_VOICE:-Aoede}
+      ENABLE_TRANSCRIPTION: ${ENABLE_TRANSCRIPTION:-true}
+      ENABLE_AFFECTIVE_DIALOG: ${ENABLE_AFFECTIVE_DIALOG:-true}
+      CLIENT_VAD_MODE: ${CLIENT_VAD_MODE:-true}
+      VAD_START_SENSITIVITY: ${VAD_START_SENSITIVITY:-high}
+      VAD_END_SENSITIVITY: ${VAD_END_SENSITIVITY:-low}
+      VAD_SILENCE_DURATION_MS: ${VAD_SILENCE_DURATION_MS:-1000}
+      VAD_PREFIX_PADDING_MS: ${VAD_PREFIX_PADDING_MS:-200}
+
+      # Google Programmable Search (Encyclopedia mode)
+      GOOGLE_CSE_ID: ${GOOGLE_CSE_ID:-}
+      GOOGLE_CSE_KEY: ${GOOGLE_CSE_KEY:-}
+
+    volumes:
+      # SQLite + emotions + safety log — không mất khi rebuild
+      - ./data:/app/data
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

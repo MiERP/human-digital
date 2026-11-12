@@ -1,33 +1,37 @@
+# Havs Robot (human-digital) — Doraemon English Buddy
+# Python 3.12 + FastAPI/uvicorn. Cổng nội bộ: 1406.
+#
+# Build:  docker build -t havs-robot .
+# Run:    docker run -p 127.0.0.1:1406:1406 -v ./data:/app/data --env-file .env havs-robot
+
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    ENV=production \
+    HOST=0.0.0.0 \
+    PORT=1406
+
+# gcc để phòng trường hợp wheel không có sẵn cho platform này
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+      gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better Docker layer caching
+# Dependency trước để tận dụng cache layer
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source code
+# Mã nguồn backend
 COPY backend/ .
 
-# Create data directory
+# Nơi chứa SQLite (child_memory.db) + emotions + audit log
 RUN mkdir -p /app/data
 
-# Expose port
-EXPOSE 8000
+EXPOSE 1406
 
-# Set environment defaults
-ENV ENV=production
-ENV HOST=0.0.0.0
-ENV PORT=8000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:1406/health')" || exit 1
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
-
-# Run with uvicorn (production mode - no reload)
 CMD ["python", "main.py"]

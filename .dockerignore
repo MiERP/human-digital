@@ -1,19 +1,30 @@
+# Build context: bỏ mọi thứ không cần vào image
+.git
+.github
+.commandcode
+
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
+.pytest_cache/
 .venv/
 venv/
 ENV/
+coverage/
+
+# Bí mật & dữ liệu — không đưa vào image
 .env
-.env.local
+.env.*
+!.env.example
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 *.log
-.pytest_cache/
+data/
+backend/data/
 
-# Android
+# Không liên quan tới runtime
 android/
 .gradle/
 build/
@@ -23,11 +34,9 @@ local.properties
 *.apk
 *.aab
 
-# OS & Editor
 .vscode/
 .DS_Store
 Thumbs.db
-.git/
 
-# Data
-backend/data/
+*.md
+doraemon_preview.png
