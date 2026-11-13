@@ -22,6 +22,7 @@ services:
       ALLOWED_ORIGINS: https://havs-robot.103-20-102-229.sslip.io,http://127.0.0.1:1406
 
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-native-audio-latest}
+      GEMINI_THINKING_BUDGET: ${GEMINI_THINKING_BUDGET:-0}
       GEMINI_VOICE: ${GEMINI_VOICE:-Aoede}
       ENABLE_TRANSCRIPTION: ${ENABLE_TRANSCRIPTION:-true}
       ENABLE_AFFECTIVE_DIALOG: ${ENABLE_AFFECTIVE_DIALOG:-true}

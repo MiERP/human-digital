@@ -69,6 +69,18 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 # child data (COPPA/GDPR) to anyone who can reach the backend.
 _ADMIN_KEY_PLACEHOLDERS = {"", "change_me_in_production", "your_admin_api_key_here"}
 
+def _is_invalid_gemini_key_error(error: Exception) -> bool:
+    """Nhận diện lỗi API key sai/hết quyền để đưa key vào cooldown."""
+    message = str(error).lower()
+    return (
+        "api key not valid" in message
+        or "api_key_invalid" in message
+        or "invalid api key" in message
+        or "unauthenticated" in message
+        or ("1008" in message and "api key" in message)
+    )
+
+
 def verify_admin_key(request: Request) -> bool:
     """Fail-closed API key verification for Master Admin endpoints."""
     if not ADMIN_API_KEY or ADMIN_API_KEY in _ADMIN_KEY_PLACEHOLDERS:
@@ -156,6 +168,11 @@ if not GEMINI_API_KEY:
     logger.warning("⚠️ CẢNH BÁO: GEMINI_API_KEY chưa được cấu hình. Vui lòng tạo file .env và điền key!")
 
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+# Thinking budget cho Gemini 2.5 native audio. 0 = tắt thinking để trả lời nhanh nhất.
+try:
+    GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
+except ValueError:
+    GEMINI_THINKING_BUDGET = 0
 VOICE_NAME = os.getenv("GEMINI_VOICE", "Aoede")
 ENABLE_TRANSCRIPTION = os.getenv("ENABLE_TRANSCRIPTION", "true").lower() in ("1", "true", "yes")
 
@@ -829,7 +846,10 @@ async def test_connection_endpoint(request: Request):
     except Exception as e:
         logger.warning(f"Test connection error: {e}")
         if not key_input:
-            key_pool.release_key(active_key)
+            if _is_invalid_gemini_key_error(e):
+                key_pool.report_auth_error(active_key)
+            else:
+                key_pool.release_key(active_key)
         return {
             "success": False,
             "message": f"Kết nối máy chủ OK nhưng API Key không hợp lệ: {str(e)}"
@@ -1203,6 +1223,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
             ),
         )
 
+        # Tắt thinking mặc định để giảm latency; có thể bật lại bằng GEMINI_THINKING_BUDGET.
+        if GEMINI_THINKING_BUDGET >= 0:
+            try:
+                config.thinking_config = types.ThinkingConfig(
+                    thinking_budget=GEMINI_THINKING_BUDGET,
+                    include_thoughts=False,
+                )
+            except Exception as _thinking_err:
+                logger.info(f"Thinking config không được hỗ trợ bởi SDK/model này: {_thinking_err}")
+
         # Proactive audio: model chủ động bỏ qua tiếng ồn/nói vãng lai (bọc theo SDK).
         if ENABLE_PROACTIVE_AUDIO:
             try:
@@ -1227,7 +1257,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
             logger.info(
                 f"Connected to Gemini Live (companion='{companion_name}' voice={persona['voice']} "
                 f"gender={companion_gender} VAD_MODE={VAD_MODE} affective={ENABLE_AFFECTIVE_DIALOG} "
-                f"proactive={ENABLE_PROACTIVE_AUDIO})."
+                f"proactive={ENABLE_PROACTIVE_AUDIO} thinking_budget={GEMINI_THINKING_BUDGET})."
             )
             await websocket.send_text(json.dumps({
                 "status": "ready",
@@ -1859,6 +1889,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
     except Exception as e:
         err_str = str(e)
+        if active_api_key and _is_invalid_gemini_key_error(e):
+            # Key sai/hết quyền: đưa vào cooldown dài để lần reconnect sau chọn key khác.
+            key_pool.report_auth_error(active_api_key, cooldown_seconds=3600.0)
         if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
             if active_api_key:
                 key_pool.report_quota_error(active_api_key, cooldown_seconds=60.0)

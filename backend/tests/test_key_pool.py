@@ -78,6 +78,19 @@ class TestKeyPoolManager(unittest.TestCase):
 
         self.assertEqual(pool.acquire_key(preferred_key_id=preferred_id), first)
 
+    def test_auth_error_puts_key_in_cooldown(self):
+        """Key bị Gemini từ chối phải bị đánh dấu cooldown, không chọn lại ngay."""
+        bad_key = "AIzaSy_BAD_KEY_123456789"
+        pool = KeyPoolManager(raw_keys=bad_key)
+
+        pool.report_auth_error(bad_key, cooldown_seconds=60)
+
+        status = pool.get_pool_status()
+        detail = status["keys_detail"][0]
+        self.assertFalse(detail["is_healthy"])
+        self.assertTrue(detail["is_in_cooldown"])
+        self.assertGreater(detail["cooldown_remaining_sec"], 0)
+
     def test_admin_add_and_remove_key(self):
         """Key thêm từ admin được lưu file; key từ .env không xóa qua admin."""
         env_key = "AIzaSy_ENV_KEY_123456789"

@@ -276,6 +276,22 @@ class KeyPoolManager:
                     logger.warning(f"🚨 Key [{k.masked_key}] hit 429 Quota Limit! Placed in cooldown for {int(cooldown_seconds)}s.")
                     break
 
+    def report_auth_error(self, key_str: Optional[str], cooldown_seconds: float = 3600.0):
+        """Đánh dấu key bị Gemini từ chối (sai key/hết quyền) để không chọn lại."""
+        if not key_str:
+            return
+        with self._lock:
+            for k in self._pool:
+                if k.key == key_str:
+                    k.consecutive_errors += 1
+                    k.cooldown_until = time.time() + cooldown_seconds
+                    k.is_healthy = False
+                    logger.warning(
+                        f"🔑 Key [{k.masked_key}] bị Gemini từ chối (invalid/unauthorized). "
+                        f"Tạm ngưng {int(cooldown_seconds)}s; id={key_id(k.key)}."
+                    )
+                    break
+
     def report_success(self, key_str: Optional[str]):
         """Báo cáo key hoạt động bình thường."""
         if not key_str:
