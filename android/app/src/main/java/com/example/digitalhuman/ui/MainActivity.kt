@@ -132,6 +132,10 @@ fun displayHostFromWsUrl(wsUrl: String): String {
         .substringBefore("/")
 }
 
+// Ẩn hoàn toàn "Mắt Thần" (camera cloud) khỏi giao diện.
+// Đổi thành true nếu muốn bật lại nút camera và khung xem trước.
+private const val ENABLE_CLOUD_VISION = false
+
 class MainActivity : ComponentActivity() {
 
     companion object {
@@ -1454,7 +1458,7 @@ fun TutorScreen(
             }
 
             // Khung "Gương Mắt Thần" (Camera Vision Mirror) khi được bật
-            if (isCameraActive) {
+            if (ENABLE_CLOUD_VISION && isCameraActive) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -1568,44 +1572,46 @@ fun TutorScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            // Nút Bật/Tắt Gương Mắt Thần 📷
-            Box(
-                modifier = Modifier
-                    .size(58.dp)
-                    .clip(CircleShape)
-                    .background(if (isCameraActive) Color(0xFFFBBF24) else Color.White.copy(alpha = 0.9f))
-                    .border(
-                        width = 2.dp,
-                        color = if (isCameraActive) Color(0xFFD97706) else Color(0xFF38BDF8),
-                        shape = CircleShape
-                    )
-                    .clickable {
-                        if (!isCameraActive) {
-                            val hasCamPerm = ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.CAMERA
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (hasCamPerm) {
-                                isCameraActive = true
-                            } else {
-                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                            }
-                        } else {
-                            isCameraActive = false
+                if (ENABLE_CLOUD_VISION) {
+                    // Nút Bật/Tắt Gương Mắt Thần 📷
+                    Box(
+                        modifier = Modifier
+                            .size(58.dp)
+                            .clip(CircleShape)
+                            .background(if (isCameraActive) Color(0xFFFBBF24) else Color.White.copy(alpha = 0.9f))
+                            .border(
+                                width = 2.dp,
+                                color = if (isCameraActive) Color(0xFFD97706) else Color(0xFF38BDF8),
+                                shape = CircleShape
+                            )
+                            .clickable {
+                                if (!isCameraActive) {
+                                    val hasCamPerm = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.CAMERA
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (hasCamPerm) {
+                                        isCameraActive = true
+                                    } else {
+                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                    }
+                                } else {
+                                    isCameraActive = false
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(text = if (isCameraActive) "👁️" else "📷", fontSize = 20.sp)
+                            Text(
+                                text = "Mắt Thần",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isCameraActive) Color(0xFF78350F) else Color(0xFF0284C7)
+                            )
                         }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(text = if (isCameraActive) "👁️" else "📷", fontSize = 20.sp)
-                    Text(
-                        text = "Mắt Thần",
-                        fontSize = 8.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isCameraActive) Color(0xFF78350F) else Color(0xFF0284C7)
-                    )
+                    }
                 }
-            }
             }
 
             // NÚT CHUÔNG VÀNG THẦN KỲ (MAGIC BELL MIC) Ở TRUNG TÂM
