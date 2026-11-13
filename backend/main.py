@@ -753,6 +753,38 @@ async def kick_device_endpoint(data: DeviceKickRequest, request: Request):
         "message": f"Đã ngắt {kicked} kết nối đang hoạt động."
     }
 
+class AddGeminiKeyRequest(BaseModel):
+    api_key: str = Field(..., min_length=15, max_length=200)
+
+
+@app.post("/api/admin/keys")
+def add_gemini_key_endpoint(data: AddGeminiKeyRequest, request: Request):
+    """Thêm Gemini API key từ trang admin và lưu bền vào data/gemini_keys.json."""
+    verify_admin_key(request)
+    success, message = key_pool.add_key(data.api_key)
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    return {
+        "success": True,
+        "message": message,
+        "key_pool": key_pool.get_pool_status(),
+    }
+
+
+@app.delete("/api/admin/keys/{key_identifier}")
+def remove_gemini_key_endpoint(key_identifier: str, request: Request):
+    """Xóa key do admin thêm. Key nạp từ .env không thể xóa qua API."""
+    verify_admin_key(request)
+    success, message = key_pool.remove_key(key_identifier)
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    return {
+        "success": True,
+        "message": message,
+        "key_pool": key_pool.get_pool_status(),
+    }
+
+
 @app.get("/health")
 def health_check():
     pool_status = key_pool.get_pool_status()

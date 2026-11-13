@@ -3,6 +3,8 @@ import time
 import hashlib
 import os
 import sys
+import tempfile
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -75,6 +77,59 @@ class TestKeyPoolManager(unittest.TestCase):
         preferred_id = hashlib.sha256(first.encode()).hexdigest()[:16]
 
         self.assertEqual(pool.acquire_key(preferred_key_id=preferred_id), first)
+
+    def test_admin_add_and_remove_key(self):
+        """Key thêm từ admin được lưu file; key từ .env không xóa qua admin."""
+        env_key = "AIzaSy_ENV_KEY_123456789"
+        admin_key = "AIzaSy_ADMIN_KEY_987654321"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = os.path.join(tmp, "gemini_keys.json")
+            pool = KeyPoolManager(raw_keys=env_key, storage_path=storage)
+
+            ok, _ = pool.add_key(admin_key)
+            self.assertTrue(ok)
+            self.assertEqual(pool.total_keys, 2)
+            self.assertTrue(os.path.exists(storage))
+
+            # Không cho thêm trùng
+            ok, _ = pool.add_key(admin_key)
+            self.assertFalse(ok)
+
+            # Không cho thêm key rác
+            ok, _ = pool.add_key("short")
+            self.assertFalse(ok)
+
+            details = pool.get_pool_status()["keys_detail"]
+            admin_entry = next(k for k in details if k["masked_key"].startswith("AIzaSy_A"))
+            self.assertEqual(admin_entry["source"], "file")
+
+            # Key từ .env không thể xóa qua admin
+            env_id = hashlib.sha256(env_key.encode()).hexdigest()[:16]
+            ok, _ = pool.remove_key(env_id)
+            self.assertFalse(ok)
+
+            # Key thêm từ admin xóa được
+            admin_id = hashlib.sha256(admin_key.encode()).hexdigest()[:16]
+            ok, _ = pool.remove_key(admin_id)
+            self.assertTrue(ok)
+            self.assertEqual(pool.total_keys, 1)
+
+    def test_admin_keys_reload_after_restart(self):
+        """Key đã thêm vẫn còn sau khi tạo lại KeyPoolManager (container restart)."""
+        admin_key = "AIzaSy_ADMIN_KEY_RELOAD_123456"
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = os.path.join(tmp, "gemini_keys.json")
+            pool = KeyPoolManager(raw_keys="", storage_path=storage)
+            self.assertTrue(pool.add_key(admin_key)[0])
+
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GEMINI_API_KEYS": ""}):
+                restarted = KeyPoolManager(storage_path=storage)
+
+            self.assertEqual(restarted.total_keys, 1)
+            self.assertEqual(
+                restarted.get_pool_status()["keys_detail"][0]["source"], "file"
+            )
 
 if __name__ == "__main__":
     unittest.main()

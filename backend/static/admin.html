@@ -144,7 +144,7 @@
             </button>
             <button onclick="switchTab('keys')" id="tabBtnKeys" class="tab-btn pb-3 px-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center gap-2 transition">
                 <i class="fa-solid fa-layer-group"></i>
-                Giám Sát Gemini Key Pool
+                Quản Lý Gemini Key Pool
             </button>
         </div>
 
@@ -216,6 +216,25 @@
 
         <!-- TAB 3: KEY POOL MONITOR -->
         <div id="tabContentKeys" class="space-y-4 hidden">
+            <div class="bg-cardBg border border-slate-800 rounded-2xl p-5 shadow-sm">
+                <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+                    <div>
+                        <h2 class="font-bold text-slate-200 text-sm flex items-center gap-2">
+                            <i class="fa-solid fa-key text-indigo-400"></i> Thêm Gemini API Key
+                        </h2>
+                        <p class="text-xs text-slate-500 mt-1">
+                            Key thêm tại đây được lưu bền trong <code class="text-slate-400">data/gemini_keys.json</code> và tự nạp lại sau khi restart.
+                        </p>
+                    </div>
+                    <span class="text-[11px] text-slate-500">Key từ <code>.env</code> chỉ giám sát, không xóa tại đây.</span>
+                </div>
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <input id="newGeminiKeyInput" type="password" autocomplete="off" placeholder="AIzaSy..." class="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition">
+                    <button onclick="addGeminiKey()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white transition shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-plus"></i> Thêm key
+                    </button>
+                </div>
+            </div>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" id="keyPoolCardsContainer">
                 <!-- Injected by JS -->
             </div>
@@ -475,17 +494,24 @@
 
             container.innerHTML = keys.map(k => `
                 <div class="bg-cardBg border ${k.is_in_cooldown ? 'border-amber-500/40 bg-amber-950/10' : 'border-slate-800'} rounded-2xl p-5 shadow-sm space-y-3">
-                    <div class="flex items-center justify-between">
+                    <div class="flex items-center justify-between gap-2">
                         <span class="font-mono text-sm font-bold text-indigo-300">${k.masked_key}</span>
-                        ${k.is_in_cooldown ? `
-                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                                ⏳ Cooldown (${k.cooldown_remaining_sec}s)
-                            </span>
-                        ` : `
-                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                Sẵn Sàng
-                            </span>
-                        `}
+                        <div class="flex items-center gap-1.5">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                k.source === 'env'
+                                    ? 'bg-slate-500/10 text-slate-300 border-slate-500/30'
+                                    : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30'
+                            }">${k.source === 'env' ? '.env' : 'Đã lưu'}</span>
+                            ${k.is_in_cooldown ? `
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                    ⏳ Cooldown (${k.cooldown_remaining_sec}s)
+                                </span>
+                            ` : `
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    Sẵn Sàng
+                                </span>
+                            `}
+                        </div>
                     </div>
                     <div class="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-800">
                         <div>
@@ -497,8 +523,47 @@
                             <span class="font-bold text-slate-200 text-sm">${k.total_sessions}</span>
                         </div>
                     </div>
+                    ${k.source !== 'env' && k.key_id ? `
+                        <button onclick="removeGeminiKey('${k.key_id}')" class="w-full py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-[11px] font-semibold transition">
+                            <i class="fa-solid fa-trash-can text-[10px]"></i> Xóa key
+                        </button>
+                    ` : ''}
                 </div>
             `).join('');
+        }
+
+        async function addGeminiKey() {
+            const input = document.getElementById('newGeminiKeyInput');
+            const apiKey = input.value.trim();
+            if (!apiKey) {
+                showToast("Vui lòng nhập Gemini API key!", "error");
+                return;
+            }
+            const res = await fetchWithAuth('/api/admin/keys', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ api_key: apiKey })
+            });
+            if (res && res.success) {
+                input.value = "";
+                showToast(res.message || "Đã thêm API key!", "success");
+                refreshData();
+            } else if (res && res.detail) {
+                showToast(res.detail, "error");
+            }
+        }
+
+        async function removeGeminiKey(keyId) {
+            if (!confirm("Xóa API key này khỏi Key Pool?")) return;
+            const res = await fetchWithAuth(`/api/admin/keys/${encodeURIComponent(keyId)}`, {
+                method: 'DELETE'
+            });
+            if (res && res.success) {
+                showToast(res.message || "Đã xóa API key!", "success");
+                refreshData();
+            } else if (res && res.detail) {
+                showToast(res.detail, "error");
+            }
         }
 
         async function kickDevice(fingerprint) {
