@@ -135,8 +135,9 @@ fun displayHostFromWsUrl(wsUrl: String): String {
 class MainActivity : ComponentActivity() {
 
     companion object {
-        // Mặc định ban đầu nếu chưa có trong SharedPreferences (Trỏ thẳng vào VPS 103.20.102.229)
-        private const val DEFAULT_SERVER_WS_URL = "ws://103.20.102.229/ws/live"
+        // Mặc định ban đầu nếu chưa có trong SharedPreferences (VPS Havs Robot)
+        private const val DEFAULT_SERVER_WS_URL = "wss://robot.103-20-102-229.sslip.io/ws/live"
+        private const val OLD_DEFAULT_SERVER_WS_URL = "ws://103.20.102.229/ws/live"
 
         // SharedPreferences keys
         const val PREFS_NAME = "robo_setup_prefs"
@@ -174,7 +175,15 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val localSetupDone = prefs.getBoolean(KEY_SETUP_DONE, false)
         val childId = resolveChildId(prefs)
-        val initialServerUrl = prefs.getString(KEY_SERVER_WS_URL, null) ?: DEFAULT_SERVER_WS_URL
+        val storedServerUrl = prefs.getString(KEY_SERVER_WS_URL, null)
+        val initialServerUrl = when (storedServerUrl) {
+            null, OLD_DEFAULT_SERVER_WS_URL -> DEFAULT_SERVER_WS_URL
+            else -> storedServerUrl
+        }
+        if (storedServerUrl == OLD_DEFAULT_SERVER_WS_URL) {
+            // Di trú app cũ sang domain VPS mới mà không xóa dữ liệu hồ sơ của bé.
+            prefs.edit().putString(KEY_SERVER_WS_URL, DEFAULT_SERVER_WS_URL).apply()
+        }
         val initialApiKey = prefs.getString(KEY_GEMINI_API_KEY, "") ?: ""
 
         setContent {
